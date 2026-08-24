@@ -1,7 +1,9 @@
 import time
-from flask import render_template, redirect, request, jsonify
+from flask import render_template, redirect, request, jsonify, Response
 from app import app
 from app.forms import video as formVideo
+from app.jobs import ClipJobManager, JobFailure, JobQueueFull
+from app import uploaders
 import clipplexAPI
 
 @app.route("/")
@@ -28,6 +30,122 @@ def get_current_stream():
         return {"message": f"No session running for user {username}"}
     return {"file_path": str(plex.media_path), "username": username, "current_time": plex.current_media_time_str, "media_title": plex.media_title}
 
+
+@app.route("/api/sessions", methods=["GET"])
+def active_sessions():
+    try:
+        sessions = clipplexAPI.PlexSessions().list_video_sessions()
+        return jsonify({"sessions": sessions, "polled_at_ms": int(time.time() * 1000)})
+    except Exception as error:
+        app.logger.exception("Could not load Plex sessions")
+        return jsonify({"message": str(error) or "Could not load Plex sessions."}), 502
+
+
+@app.route("/api/session-preview", methods=["GET"])
+def session_preview():
+    session_id = request.args.get("session_id")
+    expected_identity = request.args.get("media_identity")
+    try:
+        if not session_id:
+            raise ValueError("Select an active Plex session.")
+        if not expected_identity:
+            raise ValueError("The selected media identity is required.")
+        at_ms = int(request.args.get("at_ms", ""))
+        plex = clipplexAPI.PlexInfo(session_id=session_id, inspect_media=False)
+        if expected_identity and expected_identity != plex.media_identity:
+            raise clipplexAPI.StaleSessionError("The selected Plex player changed videos.")
+        image, content_type = plex.preview_image(at_ms)
+        response = Response(image, content_type=content_type)
+        response.headers["Cache-Control"] = "private, max-age=30"
+        return response
+    except clipplexAPI.StaleSessionError as error:
+        return jsonify({"message": str(error)}), 409
+    except (TypeError, ValueError) as error:
+        return jsonify({"message": str(error) or "Invalid preview timestamp."}), 400
+    except FileNotFoundError as error:
+        return jsonify({"message": str(error)}), 404
+    except Exception as error:
+        app.logger.exception("Session preview failed")
+        return jsonify({"message": "The current-frame preview is unavailable."}), 422
+
+
+@app.route("/api/clips", methods=["GET"])
+def created_clips():
+    return jsonify({"clips": clipplexAPI.Utils.get_videos_in_folder()})
+
+
+@app.route("/api/uploaders", methods=["GET"])
+def available_uploaders():
+    response = jsonify({"uploaders": uploaders.configured_uploaders()})
+    response.headers["Cache-Control"] = "no-store"
+    return response
+
+
+@app.route("/api/uploaders/immich/options", methods=["GET"])
+def immich_upload_options():
+    try:
+        if "immich" not in uploaders.configured_uploader_ids():
+            raise uploaders.UploadError("Immich is not configured.", 404)
+        response = jsonify(uploaders.ImmichUploader().options())
+        response.headers["Cache-Control"] = "no-store"
+        return response
+    except uploaders.UploadError as error:
+        return jsonify({"result": "error", "message": error.message}), error.status_code
+
+
+def _upload_string_list(payload, key):
+    values = payload.get(key, [])
+    if values is None:
+        return []
+    if not isinstance(values, list) or len(values) > 100:
+        raise ValueError(f"{key} must be a list containing at most 100 values.")
+    result = []
+    for value in values:
+        if not isinstance(value, str):
+            raise ValueError(f"Every {key} value must be text.")
+        cleaned = value.strip()
+        if cleaned and cleaned not in result:
+            result.append(cleaned)
+    return result
+
+
+@app.route("/api/uploads", methods=["POST"])
+def upload_clip():
+    try:
+        payload = request.get_json(silent=True)
+        if not isinstance(payload, dict):
+            raise ValueError("The upload request must contain a JSON object.")
+        file_path = payload.get("file_path")
+        uploader_id = payload.get("uploader")
+        if not isinstance(uploader_id, str) or not uploader_id.strip():
+            raise ValueError("Select an upload service.")
+        new_album_name = payload.get("new_album_name") or ""
+        if not isinstance(new_album_name, str) or len(new_album_name.strip()) > 255:
+            raise ValueError("The new album name must contain at most 255 characters.")
+        result, status_code = uploaders.upload_clip(
+            file_path=file_path,
+            uploader=uploader_id.strip(),
+            tag_ids=_upload_string_list(payload, "tag_ids"),
+            tag_names=_upload_string_list(payload, "tag_names"),
+            album_ids=_upload_string_list(payload, "album_ids"),
+            new_album_name=new_album_name.strip(),
+        )
+        return jsonify(result), status_code
+    except ValueError as error:
+        return jsonify({"result": "error", "message": str(error)}), 400
+    except uploaders.UploadError as error:
+        return jsonify({"result": "error", "message": error.message}), error.status_code
+
+
+@app.route("/api/clip-jobs/<job_id>", methods=["GET"])
+def clip_job_status(job_id):
+    job = clip_job_manager.get(job_id)
+    if job is None:
+        return jsonify({"message": "This clip job is no longer available."}), 404
+    response = jsonify(job)
+    response.headers["Cache-Control"] = "no-store"
+    return response
+
 @app.route("/instant_video.html", methods=["GET"])
 def timed_video():
     form = formVideo()
@@ -35,23 +153,209 @@ def timed_video():
 
 @app.route("/create_video", methods=["POST"])
 def create_video():
-    args = request.args
-    _pad_time = clipplexAPI.Utils()._pad_time
-    start = f"{_pad_time(args.get('start_hour'))}:{_pad_time(args.get('start_minute'))}:{_pad_time(args.get('start_second'))}"
-    end = f"{_pad_time(args.get('end_hour'))}:{_pad_time(args.get('end_minute'))}:{_pad_time(args.get('end_second'))}"
-    result = get_instant_video(args.get('username'), start, end)
-    return jsonify(result)
+    try:
+        if request.is_json:
+            payload = request.get_json(silent=True)
+            if payload is None:
+                raise ValueError("The clip request must contain a valid JSON object.")
+            queued_payload = validate_json_clip_payload(payload)
+            job_id = clip_job_manager.enqueue(queued_payload)
+            return jsonify({
+                "result": "queued",
+                "job_id": job_id,
+                "status_url": f"/api/clip-jobs/{job_id}",
+            }), 202
+        else:
+            args = request.args
+            _pad_time = clipplexAPI.Utils()._pad_time
+            start = f"{_pad_time(args.get('start_hour'))}:{_pad_time(args.get('start_minute'))}:{_pad_time(args.get('start_second'))}"
+            end = f"{_pad_time(args.get('end_hour'))}:{_pad_time(args.get('end_minute'))}:{_pad_time(args.get('end_second'))}"
+            result = get_instant_video(
+                username=args.get('username'),
+                start=start,
+                end=end,
+                audio_stream_id=args.get('audio_stream_id'),
+                subtitle_stream_id=args.get('subtitle_stream_id'),
+                expected_media_identity=args.get('expected_media_identity'),
+                expected_session_id=args.get('expected_session_id'),
+            )
+        return jsonify(result)
+    except clipplexAPI.TrackSelectionError as error:
+        plex = error.plex_data
+        return jsonify({
+            "result": "track_selection_required",
+            "message": error.message,
+            "media_identity": plex.media_identity,
+            "session_id": plex.session_identifier,
+            "failed_track_id": error.failed_track.id if error.failed_track else None,
+            "tracks": plex.track_options(),
+        }), 422
+    except clipplexAPI.StaleSessionError as error:
+        return jsonify({"result": "stale_session", "message": str(error)}), 409
+    except clipplexAPI.UnsupportedVideoError as error:
+        return jsonify({"result": "unsupported_video", "message": str(error)}), 422
+    except clipplexAPI.VideoConversionError as error:
+        return jsonify({"result": "video_conversion_failed", "message": str(error)}), 422
+    except ValueError as error:
+        return jsonify({"result": "error", "message": str(error)}), 400
+    except JobQueueFull as error:
+        return jsonify({"result": "queue_full", "message": str(error)}), 429
+    except Exception as error:
+        app.logger.exception("Video creation failed")
+        return jsonify({
+            "result": "error",
+            "message": str(error) or "Clipplex could not create the clip.",
+        }), 500
 
-def get_instant_video(username, start, end):
-    plex_data = clipplexAPI.PlexInfo(username)
-    clip_time = clipplexAPI.Utils().calculate_clip_time(start, end)
+
+def validate_json_clip_payload(payload):
+    if not isinstance(payload, dict):
+        raise ValueError("The clip request must be a JSON object.")
+    if not payload.get("session_id"):
+        raise ValueError("Select an active Plex session.")
+    if not payload.get("media_identity"):
+        raise ValueError("The selected media identity is required.")
+    try:
+        start_ms = int(payload.get("start_ms"))
+        end_ms = int(payload.get("end_ms"))
+    except (TypeError, ValueError) as error:
+        raise ValueError("Start and End must be valid millisecond timestamps.") from error
+    if start_ms < 0 or end_ms <= start_ms:
+        raise ValueError("The clip end time must be later than its start time.")
+    return {
+        "session_id": str(payload["session_id"]),
+        "media_identity": str(payload["media_identity"]),
+        "start_ms": start_ms,
+        "end_ms": end_ms,
+        "audio_stream_id": payload.get("audio_stream_id"),
+        "subtitle_stream_id": payload.get("subtitle_stream_id"),
+    }
+
+def get_instant_video(
+    username=None,
+    start=None,
+    end=None,
+    session_id=None,
+    start_ms=None,
+    end_ms=None,
+    audio_stream_id=None,
+    subtitle_stream_id=None,
+    expected_media_identity=None,
+    expected_session_id=None,
+    progress_callback=None,
+):
+    def progress(stage, overall, stage_progress, message):
+        if progress_callback is not None:
+            progress_callback(stage, overall, stage_progress, message)
+
+    request_started_at = time.monotonic()
+    plex_started_at = time.monotonic()
+    progress("validating", 2, 0, "Checking the selected Plex session.")
+    plex_data = clipplexAPI.PlexInfo(username=username, session_id=session_id)
+    progress("validating", 8, 75, "Validating media identity and selected tracks.")
+    plex_elapsed = time.monotonic() - plex_started_at
+    log_plex = app.logger.warning if plex_elapsed > 5.0 else app.logger.info
+    log_plex("Plex session and media inspection finished in %.2fs", plex_elapsed)
+    if expected_media_identity and expected_media_identity != plex_data.media_identity:
+        raise clipplexAPI.StaleSessionError(
+            "The playing video changed. Check the current stream before retrying."
+        )
+    if expected_session_id and expected_session_id != plex_data.session_identifier:
+        raise clipplexAPI.StaleSessionError(
+            "The Plex playback session changed. Check the current stream before retrying."
+        )
+    if start_ms is None or end_ms is None:
+        start_ms = clipplexAPI.Utils.time_to_milliseconds(start)
+        end_ms = clipplexAPI.Utils.time_to_milliseconds(end)
+    start_ms = int(start_ms)
+    end_ms = int(end_ms)
+    if start_ms < 0:
+        raise ValueError("The clip start time cannot be negative.")
+    if plex_data.duration_ms and end_ms > plex_data.duration_ms:
+        raise ValueError("The clip end time is past the end of the playing video.")
+    clip_duration_ms = end_ms - start_ms
+    if clip_duration_ms <= 0:
+        raise ValueError("The clip end time must be later than its start time.")
+    clip_time = clip_duration_ms / 1000.0
+    audio_track, subtitle_track = plex_data.resolve_tracks(audio_stream_id, subtitle_stream_id)
+    progress("validating", 10, 100, "The clip range and selected tracks are ready.")
     media_name = plex_data.media_title.replace(" ", "")
-    file_name = f"{username}_{media_name}_{int(time.time())}"
-    current_media_time = plex_data.current_media_time_str
-    print(f"Creating video of {clip_time} seconds starting at {start} for user {username} for file {plex_data.media_path}")
-    video = clipplexAPI.Video(plex_data, start, clip_time, file_name)
-    video.extract_video()
-    return {"result":"success"}
+    file_name = f"{plex_data.username}_{media_name}_{int(time.time())}"
+    print(
+        f"Creating video of {clip_time} seconds starting at {start_ms}ms "
+        f"for session {plex_data.session_identifier}"
+    )
+    video = clipplexAPI.Video(
+        plex_data,
+        start_ms,
+        clip_time,
+        file_name,
+        audio_track,
+        subtitle_track,
+    )
+    video.extract_video(progress)
+    progress("finalizing", 99, 90, "Reading the completed clip metadata.")
+    request_elapsed = time.monotonic() - request_started_at
+    log_request = app.logger.warning if request_elapsed > 5.0 else app.logger.info
+    log_request(
+        "Create-video request finished in %.2fs",
+        request_elapsed,
+    )
+    return {
+        "result": "success",
+        "clip": clipplexAPI.Utils.get_video_in_folder(video.output_path),
+    }
+
+
+def run_clip_job(payload, progress):
+    try:
+        return get_instant_video(
+            session_id=payload["session_id"],
+            start_ms=payload["start_ms"],
+            end_ms=payload["end_ms"],
+            audio_stream_id=payload.get("audio_stream_id"),
+            subtitle_stream_id=payload.get("subtitle_stream_id"),
+            expected_media_identity=payload["media_identity"],
+            expected_session_id=payload["session_id"],
+            progress_callback=progress,
+        )
+    except clipplexAPI.TrackSelectionError as error:
+        plex = error.plex_data
+        raise JobFailure("recovery_required", {
+            "result": "track_selection_required",
+            "message": error.message,
+            "media_identity": plex.media_identity,
+            "session_id": plex.session_identifier,
+            "failed_track_id": error.failed_track.id if error.failed_track else None,
+            "tracks": plex.track_options(),
+            "retry_payload": payload,
+        }) from error
+    except clipplexAPI.StaleSessionError as error:
+        raise JobFailure("failed", {
+            "result": "stale_session",
+            "message": str(error),
+        }) from error
+    except clipplexAPI.UnsupportedVideoError as error:
+        raise JobFailure("failed", {
+            "result": "unsupported_video",
+            "message": str(error),
+        }) from error
+    except clipplexAPI.VideoConversionError as error:
+        raise JobFailure("failed", {
+            "result": "video_conversion_failed",
+            "message": str(error),
+        }) from error
+    except ValueError as error:
+        raise JobFailure("failed", {"result": "error", "message": str(error)}) from error
+    except Exception as error:
+        app.logger.exception("Video creation job failed")
+        raise JobFailure("failed", {
+            "result": "error",
+            "message": str(error) or "Clipplex could not create the clip.",
+        }) from error
+
+
+clip_job_manager = ClipJobManager(run_clip_job)
 
 @app.route("/quick_add_time_to_start_time", methods=["POST"])
 def quick_add_time_to_start_time():
@@ -70,9 +374,14 @@ def remove_file():
 
 @app.route("/streamable_upload", methods=["POST"])
 def streamable_upload():
-    file_path = request.args.get("file_path")
-    upload = clipplexAPI.Utils().streamable_upload(file_path)
-    return upload
+    try:
+        result, status_code = uploaders.upload_clip(
+            file_path=request.args.get("file_path"),
+            uploader="streamable",
+        )
+        return jsonify(result), status_code
+    except uploaders.UploadError as error:
+        return jsonify({"result": "error", "message": error.message}), error.status_code
 
 @app.route("/login.html", methods=["GET", "POST"])
 def login():

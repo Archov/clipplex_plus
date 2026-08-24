@@ -1,0 +1,27 @@
+services:
+  clipplex:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    image: clipplex:local
+    container_name: clipplex
+    restart: unless-stopped
+
+    environment:
+      FLASK_APP: main.py
+      PYTHONUNBUFFERED: "1"
+      TZ: America/Chicago
+      PLEX_URL: ${PLEX_URL}
+      PLEX_TOKEN: ${PLEX_TOKEN}
+      STREAMABLE_LOGIN: ${STREAMABLE_LOGIN:-}
+      STREAMABLE_PASSWORD: ${STREAMABLE_PASSWORD:-}
+      IMMICH_URL: ${IMMICH_URL:-}
+      IMMICH_API_KEY: ${IMMICH_API_KEY:-}
+      IMMICH_DEFAULT_TAG: ${IMMICH_DEFAULT_TAG:-}
+
+    volumes:
+      - ${MEDIA_PATH}:/data/media:ro
+      - ${CLIP_PATH}:/app/app/static/media
+
+    ports:
+      - "9945:5000"

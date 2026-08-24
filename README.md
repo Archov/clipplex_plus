@@ -19,6 +19,26 @@ An in-depth paragraph about your project and overview of use.
 | PLEX_TOKEN           | token for plex   | Mandatory |
 | STREAMABLE_LOGIN     | ...              | Optional  |
 | STREAMABLE_PASSWORD  | ...              | Optional  |
+| IMMICH_URL           | http://immich-server:2283 | Optional; Immich is enabled only with an API key |
+| IMMICH_API_KEY       | ...              | Optional; see the exact permissions below |
+| IMMICH_DEFAULT_TAG   | #plex-clip       | Optional; always applied to Immich uploads |
+| FFMPEG_PRESET        | veryfast         | Optional x264 speed/compression tradeoff |
+
+### Immich API key permissions
+
+For all Clipplex Immich upload features, give the API key only these permissions:
+
+```text
+asset.upload
+tag.read
+tag.create
+tag.asset
+album.read
+album.create
+albumAsset.create
+```
+
+These permissions allow Clipplex to upload the video (`asset.upload`), list, create, and assign tags (`tag.read`, `tag.create`, and `tag.asset`), and list, create, and add assets to albums (`album.read`, `album.create`, and `albumAsset.create`). The `all` permission and asset read, update, delete, download, or sharing permissions are not required.
 
 Finding Plex token: https://support.plex.tv/articles/204059436-finding-an-authentication-token-x-plex-token/
 
@@ -58,6 +78,9 @@ networks:
       - PLEX_TOKEN=YOUR_PLEX_TOKEN
       - STREAMABLE_LOGIN=YOUR_STREAMABLE_LOGIN
       - STREAMABLE_PASSWORD=YOUR_STREAMABLE_PASSWORD
+      - IMMICH_URL=YOUR_IMMICH_URL (example: http://immich-server:2283)
+      - IMMICH_API_KEY=YOUR_IMMICH_API_KEY
+      - IMMICH_DEFAULT_TAG=#plex-clip
     volumes:
       - /media:/media
       - /volumes/clipplex:/app/app/static/media
