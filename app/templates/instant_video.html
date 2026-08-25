@@ -1,294 +1,1145 @@
 {% extends "base.html" %}
 
 {% block content %}
-  <h1 class="mt-4">Video</h1>
-  <p><span id="Info"></span></p>
-  <p><span id="Title"></span></p>
-  <p><span id="Current_Time"></span></p>
-  <div id="Current_time_value" style="display: none;"></div>
+<style>
+  .session-card { cursor: pointer; border: 2px solid transparent; transition: border-color .15s, box-shadow .15s; }
+  .session-card .card-body, .clip-controls .card-body, .video-library .card-body { color: #212529; }
+  .session-card:hover { border-color: #adb5bd; }
+  .session-card.selected { border-color: #0d6efd; box-shadow: 0 0 0 .2rem rgba(13,110,253,.15); }
+  .session-preview { aspect-ratio: 16 / 9; width: 100%; object-fit: cover; background: #1f2428; }
+  .preview-placeholder { aspect-ratio: 16 / 9; display: grid; place-items: center; background: #1f2428; color: #adb5bd; }
+  .timestamp-input { font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; }
+  .state-badge { text-transform: capitalize; }
+  .clip-controls.disabled { opacity: .65; }
+  .video-library video { max-width: 100%; height: auto; }
+  .job-progress-overlay { position: fixed; inset: 0; z-index: 2000; display: grid; place-items: center; padding: 1rem; }
+  .job-progress-backdrop { position: absolute; inset: 0; background: rgba(15, 23, 31, .78); backdrop-filter: blur(5px); }
+  .job-progress-dialog { position: relative; width: min(560px, 100%); color: #212529; box-shadow: 0 1rem 3rem rgba(0,0,0,.35); }
+  .job-progress-bar { transition: width .2s linear; min-width: 0; }
+  .upload-option-list { min-height: 9rem; }
+  .upload-tag-chip { display: inline-flex; align-items: center; gap: .35rem; }
+</style>
 
-  <form action="" method="post" target="dataframe" novalidate>
-    {{ form.csrf_token }}
-    <p>
-      {{ form.user.label }} {{ form.user(id="username_input", size=15) }} <i id='check_current_stream' class='fas fa-eye' onclick='check_stream();'></i><br>
-      <table>
-        <tr>
-          <td>
-            Start time:
-          </td>
-          <td>
-            <i class="fas fa-minus-circle" onclick="removeStartTime();"></i>
-          </td>
-          <td>
-            {{ form.start_time_hour(id="start_hour", size=2, placeholder="HH", maxlength=2) }}
-          </td>
-          <td>
-            {{ form.start_time_minute(id="start_minute", size=2, placeholder="MM", maxlength=2) }}
-          </td>
-          <td>
-            {{ form.start_time_sec(id="start_second", size=2, placeholder="SS", maxlength=2) }}
-          </td>
-          <td>
-            <button type='button' onclick='add_time_to_end(15);' id='add_15_sec' class='quick_time_button'>+15s</button>
-          </td>
-          <td>
-            <button type='button' onclick='add_time_to_end(30);' id='add_30_sec' class='quick_time_button'>+30s</button>
-          </td>
-          <td>
-            <button type='button' onclick='add_time_to_end(60);' id='add_60_sec' class='quick_time_button'>+1m</button>
-          </td>
-          <td>        
-            <button type='button' onclick='add_time_to_end(120);' id='add_30_sec' class='quick_time_button'>+2m</button>
-          </td>
-        </tr>
-        <tr>
-          <td>
-            End time:
-          </td>
-          <td>
-            <i class="fas fa-minus-circle" onclick="removeEndTime();"></i>
-          </td>
-          <td>
-            {{ form.end_time_hour(id="end_hour", size=2, placeholder="HH", maxlength=2) }}
-          </td>
-          <td>
-            {{ form.end_time_minute(id="end_minute", size=2, placeholder="MM", maxlength=2)  }} 
-          </td>
-          <td>
-            {{ form.end_time_sec(id="end_second", size=2, placeholder="SS", maxlength=2)  }}
-          </td>
-        </tr>
-      </table>
-      <br>
-      <!--
-      <div id="advanced_settings" onclick="setting_table_visibility()"><i class="fas fa-cog"></i> Advanced settings</div>
-      <table id="advanced_settings_table" style="display:none">
-        <tr>
-          <td>
-            Format
-          </td>
-          <td>
-              <input checked type="checkbox" id="MP4" name="video_format" value="MP4">
-              <label for="html">MP4</label>
-              <input type="checkbox" id="GIF" name="video_format" value="GIF">
-              <label for="css">GIF</label><br>
-          </td>
-        </tr>
-        <tr>
-          <td>
-            Subtitles
-          </td>
-          <td>
-              <input checked type="radio" id="subtitle_off" name="subtile_value" value="OFF">
-              <label for="html">OFF</label>
-              <input type="radio" id="subtitle_on" name="subtile_value" value="ON">
-              <label for="css">ON</label><br>
-          </td>
-          <td>
-            <select name="subtitle_version" id="subtitle_version">
-              <option value="sub_empty"></option>
-              <option value="sub_english_1">English</option>
-              <option value="sub_french_1">French</option>
-              <option value="sub_spanish_1">Spanish</option>
-              <option value="sub_something_1">Arabic</option>
-            </select>
-          </td>
-        </tr>
-      </table>
-    -->
-      <button type='button' onclick='createVideo()' id='create_video_btn' class='create_video'>Create video</button>
-    </p>
+<h1 class="mt-4">Create a Plex Clip</h1>
+<div id="Info" class="mb-3" role="status" aria-live="polite"></div>
+
+<div id="job_progress_overlay" class="job-progress-overlay d-none" role="dialog" aria-modal="true" aria-labelledby="job_progress_title" aria-describedby="job_progress_message">
+  <div class="job-progress-backdrop"></div>
+  <div class="card job-progress-dialog">
+    <div class="card-body p-4">
+      <div class="d-flex justify-content-between align-items-start gap-3">
+        <div>
+          <h2 id="job_progress_title" class="h4 mb-1">Creating clip</h2>
+          <div id="job_progress_stage" class="text-muted">Queued</div>
+        </div>
+        <strong id="job_progress_percent" class="h4 mb-0">0%</strong>
+      </div>
+      <div class="progress mt-3" style="height: 1.25rem;">
+        <div id="job_progress_bar" class="progress-bar progress-bar-striped progress-bar-animated job-progress-bar" role="progressbar" style="width: 0%" aria-valuemin="0" aria-valuemax="100" aria-valuenow="0"></div>
+      </div>
+      <p id="job_progress_message" class="mt-3 mb-2">Waiting for the renderer.</p>
+      <div class="d-flex justify-content-between small text-muted">
+        <span id="job_progress_elapsed">Elapsed: 00:00</span>
+        <span id="job_progress_queue" class="d-none"></span>
+      </div>
+      <button type="button" id="job_progress_dismiss" class="btn btn-secondary mt-3 d-none">Dismiss</button>
+    </div>
+  </div>
+</div>
+
+<div class="modal fade" id="upload_modal" tabindex="-1" aria-labelledby="upload_modal_title" aria-hidden="true">
+  <div class="modal-dialog modal-lg modal-dialog-scrollable">
+    <div class="modal-content">
+      <div class="modal-header">
+        <h2 class="modal-title h5" id="upload_modal_title">Upload clip</h2>
+        <button type="button" class="btn-close" data-bs-dismiss="modal" aria-label="Close"></button>
+      </div>
+      <div class="modal-body">
+        <div id="upload_service_group" class="mb-3 d-none">
+          <label for="upload_service" class="form-label">Upload to</label>
+          <select id="upload_service" class="form-select">
+            <option value="">Choose a service…</option>
+          </select>
+        </div>
+        <div id="immich_upload_options" class="d-none">
+          <div id="immich_options_loading" class="text-muted mb-3">Loading Immich tags and albums…</div>
+          <div id="immich_options_fields" class="d-none">
+            <div id="immich_default_tag_notice" class="alert alert-info py-2 d-none"></div>
+            <div class="row g-3">
+              <div class="col-md-6">
+                <label for="immich_tag_filter" class="form-label">Existing tags</label>
+                <input id="immich_tag_filter" class="form-control form-control-sm mb-2" type="search" placeholder="Search tags">
+                <select id="immich_tag_ids" class="form-select upload-option-list" multiple aria-label="Existing Immich tags"></select>
+                <div class="form-text">Hold Ctrl or Command to select multiple tags.</div>
+              </div>
+              <div class="col-md-6">
+                <label for="immich_album_filter" class="form-label">Existing albums</label>
+                <input id="immich_album_filter" class="form-control form-control-sm mb-2" type="search" placeholder="Search albums">
+                <select id="immich_album_ids" class="form-select upload-option-list" multiple aria-label="Existing Immich albums"></select>
+                <div class="form-text">The clip can be added to more than one album.</div>
+              </div>
+            </div>
+            <div class="mt-3">
+              <label for="immich_new_tag" class="form-label">Create tags</label>
+              <div class="input-group">
+                <input id="immich_new_tag" class="form-control" placeholder="Enter a tag and press Enter">
+                <button id="immich_add_tag" type="button" class="btn btn-outline-secondary">Add</button>
+              </div>
+              <div id="immich_new_tag_chips" class="d-flex flex-wrap gap-2 mt-2"></div>
+            </div>
+            <div class="mt-3">
+              <label for="immich_new_album" class="form-label">Create one new album</label>
+              <input id="immich_new_album" class="form-control" maxlength="255" placeholder="Optional album name">
+            </div>
+          </div>
+        </div>
+        <div id="upload_modal_status" class="mt-3" role="status" aria-live="polite"></div>
+      </div>
+      <div class="modal-footer">
+        <button type="button" class="btn btn-secondary" data-bs-dismiss="modal">Cancel</button>
+        <button type="button" id="upload_submit" class="btn btn-primary" disabled>Upload</button>
+      </div>
+    </div>
+  </div>
+</div>
+
+<section aria-labelledby="sessions_heading">
+  <div class="d-flex justify-content-between align-items-center mb-2">
+    <h2 id="sessions_heading" class="h4 mb-0">Active Plex Sessions</h2>
+    <span id="session_refresh_status" class="text-muted small">Loading…</span>
+  </div>
+  <div id="session_empty" class="alert alert-secondary">Looking for active video sessions…</div>
+  <div id="session_list" class="row g-3" role="radiogroup" aria-labelledby="sessions_heading"></div>
+</section>
+
+<section id="clip_controls" class="card mt-4 clip-controls disabled" aria-labelledby="clip_heading">
+  <div class="card-body">
+    <h2 id="clip_heading" class="h4">Clip Range</h2>
+    <div class="d-flex align-items-center gap-2 mb-3">
+      <span>Live Plex position: <strong id="current_position" class="timestamp-input">--:--:--.---</strong></span>
+      <button class="btn btn-sm btn-outline-secondary" type="button" id="refresh_position" title="Refresh live Plex position" disabled>
+        <i class="fas fa-sync-alt" aria-hidden="true"></i><span class="visually-hidden">Refresh live Plex position</span>
+      </button>
+    </div>
+    <form id="clip_form" novalidate>
+      {{ form.csrf_token }}
+      <div class="row g-3 align-items-end">
+        <div class="col-md-5">
+          <label for="start_time" class="form-label">Start</label>
+          <div class="input-group">
+            <input id="start_time" class="form-control timestamp-input" placeholder="HH:MM:SS.mmm" autocomplete="off" disabled>
+            <button class="btn btn-primary" type="button" id="capture_start" title="Use current Plex position for Start" disabled>
+              <i class="fas fa-clipboard" aria-hidden="true"></i><span class="visually-hidden">Use current Plex position for Start</span>
+            </button>
+            <button class="btn btn-outline-secondary" type="button" id="clear_start" title="Clear Start" disabled>
+              <i class="fas fa-times" aria-hidden="true"></i><span class="visually-hidden">Clear Start</span>
+            </button>
+          </div>
+        </div>
+        <div class="col-md-5">
+          <label for="end_time" class="form-label">End</label>
+          <div class="input-group">
+            <input id="end_time" class="form-control timestamp-input" placeholder="HH:MM:SS.mmm" autocomplete="off" disabled>
+            <button class="btn btn-primary" type="button" id="capture_end" title="Use current Plex position for End" disabled>
+              <i class="fas fa-clipboard" aria-hidden="true"></i><span class="visually-hidden">Use current Plex position for End</span>
+            </button>
+            <button class="btn btn-outline-secondary" type="button" id="clear_end" title="Clear End" disabled>
+              <i class="fas fa-times" aria-hidden="true"></i><span class="visually-hidden">Clear End</span>
+            </button>
+          </div>
+        </div>
+        <div class="col-md-2 d-grid">
+          <button type="button" id="create_video_btn" class="btn btn-success" disabled>Create Video</button>
+        </div>
+      </div>
+      <div class="mt-3 d-flex flex-wrap gap-2">
+        <span class="text-muted align-self-center me-1">Set End after Start:</span>
+        <button type="button" class="btn btn-sm btn-outline-primary quick-time" data-seconds="15" disabled>+15s</button>
+        <button type="button" class="btn btn-sm btn-outline-primary quick-time" data-seconds="30" disabled>+30s</button>
+        <button type="button" class="btn btn-sm btn-outline-primary quick-time" data-seconds="60" disabled>+1m</button>
+        <button type="button" class="btn btn-sm btn-outline-primary quick-time" data-seconds="120" disabled>+2m</button>
+      </div>
+      <div id="time_error" class="text-danger small mt-2" aria-live="polite"></div>
     </form>
+  </div>
+</section>
 
-<table>
-  {% for video in videos %}
-    {% set file_path = video['file_path'] %}
-    {% set title = video['title'] %}
-    {% set original_time = video['original_start_time'] %}
-    {% set creator = video['username'] %}
-    {% set show = video['show'] %}
-    {% set episode = video['episode_number'] %}
-    {% set season = video['season_number'] %}
-      <tr>
-        <td style="padding-right: 10px;">
-          <video width="768" height="432" controls>
-            <source src="{{file_path}}" type="video/mp4" />
-          </video>
-        </td>
-        <td>
-          <a href="{{file_path}}" download=""><i class="fas fa-download iconColumn" style="font-size: 50px;"></i></a><br><br>
-          <button type='button' class="fas fa-trash-alt" onclick='remove_file("{{file_path}}")' class="iconColumn" style="font-size: 50px; color: red;"></button><br><br>
-          <img src="static/icons/streamable.png" height="50px" onclick='upload_streamable("{{file_path}}")' width="75px" class="iconColumn"><br><br>
-          <img src="static/icons/imgur.png" height="50px" width="90px" class="iconColumn"><br>
-        </td>
-      </tr>
-      <tr>
-        <td>
-          <i id="{{loop.index}}" class="fas fa-plus-circle" onclick=viewDetails(this.id)></i>
-        </td>
-      </tr>
-      <tr id="details_{{loop.index}}" class="extraVideoDetails">
-        <td>
-        {% if show|length %}
-          <p>
-            <b>Show: </b>{{show}}<br>
-            <b>Episode Name: </b>{{title}}<br>
-            <b>Season/Episode: </b>S{{season}}E{{episode}}<br>
-            <b>Time taken: </b>{{original_time}}<br>
-            <b>Created By: </b>{{creator}}<br>
-          </p>
-        {% else %}
-        <p>
-          <b>Movie: </b>{{title}}<br>
-          <b>Time taken: </b>{{original_time}}<br>
-          <b>Created By: </b>{{creator}}<br>
-        </p> 
-        {% endif %}
-        </td>
-      </tr>
-  {% endfor %}
-</table>
+<div id="track_recovery" class="alert alert-warning d-none mt-3" role="alert">
+  <h2 class="h5">Choose tracks for this clip</h2>
+  <p id="track_recovery_message"></p>
+  <div class="row g-3 align-items-end">
+    <div class="col-md-5">
+      <label for="recovery_audio" class="form-label">Audio</label>
+      <select id="recovery_audio" class="form-select"></select>
+    </div>
+    <div class="col-md-5">
+      <label for="recovery_subtitle" class="form-label">Subtitles</label>
+      <select id="recovery_subtitle" class="form-select"></select>
+    </div>
+    <div class="col-md-2 d-grid gap-2">
+      <button type="button" id="retry_with_tracks" class="btn btn-primary">Retry</button>
+      <button type="button" id="cancel_track_retry" class="btn btn-link">Cancel</button>
+    </div>
+  </div>
+</div>
 
-
-
-<div class="clearfix"></div>
+<section class="video-library mt-5" aria-labelledby="clips_heading">
+  <h2 id="clips_heading" class="h4">Created Clips</h2>
+  <div id="created_clips_list" class="row g-4">
+    {% for video in videos %}
+      <div class="col-12 created-clip-card">
+        <div class="card">
+          <div class="card-body row g-3">
+            <div class="col-lg-9">
+              <video controls preload="metadata"><source src="{{ video['file_path'] }}" type="video/mp4"></video>
+            </div>
+            <div class="col-lg-3">
+              <h3 class="h5">{{ video['show'] or video['title'] or 'Clip' }}</h3>
+              <p class="small text-muted">
+                {% if video['show'] %}{{ video['title'] }} · S{{ video['season_number'] }}E{{ video['episode_number'] }}<br>{% endif %}
+                Started at {{ video['original_start_time'] }}<br>Created by {{ video['username'] }}
+              </p>
+              <div class="d-flex gap-2">
+                <a class="btn btn-outline-primary" href="{{ video['file_path'] }}" download title="Download"><i class="fas fa-download"></i></a>
+                <button type="button" class="btn btn-outline-danger remove-clip" data-file='{{ video["file_path"]|tojson }}' title="Delete"><i class="fas fa-trash-alt"></i></button>
+                <button type="button" class="btn btn-outline-secondary clip-upload d-none" data-file='{{ video["file_path"]|tojson }}' title="Upload clip"><i class="fas fa-share-square"></i></button>
+              </div>
+            </div>
+          </div>
+        </div>
+      </div>
+    {% else %}
+      <p id="no_created_clips" class="text-muted">No clips have been created yet.</p>
+    {% endfor %}
+  </div>
+</section>
 
 <script>
-  function viewDetails(id){
-    if($("#details_"+id).is(":visible")){
-      $("#"+id).attr("class","fas fa-plus-circle");
-      $("#details_"+id).hide()
-    } else{
-      $("#"+id).attr("class","fas fa-minus-circle");
-      $("#details_"+id).show();
+  const sessionNodes = new Map();
+  let sessionsById = new Map();
+  let selectedSessionId = null;
+  let capturedMediaIdentity = null;
+  let pollPromise = null;
+  let trackRecoveryContext = null;
+  const ACTIVE_JOB_KEY = 'clipplex.activeClipJob';
+  let activeJobId = localStorage.getItem(ACTIVE_JOB_KEY);
+  let jobPollPromise = null;
+  let jobPollTimer = null;
+  let sessionPollTimer = null;
+  const startInput = document.getElementById('start_time');
+  const endInput = document.getElementById('end_time');
+  const info = document.getElementById('Info');
+  let uploaderConfigurations = [];
+  let currentUploadFile = null;
+  let uploadInProgress = false;
+  let immichOptionsReady = false;
+  let newImmichTags = [];
+
+  function formatTimestamp(milliseconds) {
+    const value = Math.max(0, Number(milliseconds) || 0);
+    const hours = Math.floor(value / 3600000);
+    const minutes = Math.floor((value % 3600000) / 60000);
+    const seconds = Math.floor((value % 60000) / 1000);
+    const millis = Math.floor(value % 1000);
+    return String(hours).padStart(2, '0') + ':' + String(minutes).padStart(2, '0') + ':' +
+      String(seconds).padStart(2, '0') + '.' + String(millis).padStart(3, '0');
+  }
+
+  function parseTimestamp(value) {
+    const match = String(value || '').trim().match(/^(\d+):([0-5]\d):([0-5]\d)(?:\.(\d{1,3}))?$/);
+    if (!match) return null;
+    const millis = (match[4] || '0').padEnd(3, '0');
+    return ((Number(match[1]) * 60 + Number(match[2])) * 60 + Number(match[3])) * 1000 + Number(millis);
+  }
+
+  function selectedSession() { return sessionsById.get(selectedSessionId) || null; }
+
+  function updateSessionTabStops() {
+    const firstSessionId = sessionNodes.keys().next().value || null;
+    const focusableSessionId = sessionNodes.has(selectedSessionId) ? selectedSessionId : firstSessionId;
+    sessionNodes.forEach((node, sessionId) => {
+      node.card.tabIndex = sessionId === focusableSessionId ? 0 : -1;
+    });
+  }
+
+  function moveSessionFocus(sessionId, key) {
+    const sessionIds = Array.from(sessionNodes.keys());
+    if (!sessionIds.length) return;
+    const currentIndex = Math.max(0, sessionIds.indexOf(sessionId));
+    let targetIndex = currentIndex;
+    if (key === 'Home') targetIndex = 0;
+    else if (key === 'End') targetIndex = sessionIds.length - 1;
+    else if (key === 'ArrowRight' || key === 'ArrowDown') targetIndex = (currentIndex + 1) % sessionIds.length;
+    else if (key === 'ArrowLeft' || key === 'ArrowUp') targetIndex = (currentIndex - 1 + sessionIds.length) % sessionIds.length;
+    const targetId = sessionIds[targetIndex];
+    const target = sessionNodes.get(targetId);
+    if (!target) return;
+    target.card.focus();
+    selectSession(targetId);
+  }
+
+  function livePositionMs(session, now = performance.now()) {
+    if (!session) return null;
+    let position = Number(session.client_anchor_position_ms ?? session.view_offset_ms) || 0;
+    if (session.state === 'playing' && Number.isFinite(session.client_received_at_ms)) {
+      position += Math.max(0, now - session.client_received_at_ms);
+    }
+    if (session.duration_ms) position = Math.min(position, Number(session.duration_ms));
+    return Math.max(0, Math.round(position));
+  }
+
+  function createSessionNode(session) {
+    const column = document.createElement('div');
+    column.className = 'col-md-6 col-xl-4';
+    const card = document.createElement('div');
+    card.className = 'card session-card h-100';
+    card.tabIndex = -1;
+    card.setAttribute('role', 'radio');
+    card.setAttribute('aria-checked', 'false');
+    card.innerHTML = `
+      <div class="preview-placeholder"><i class="fas fa-film fa-2x"></i></div>
+      <img class="session-preview d-none" alt="Current frame preview">
+      <div class="card-body">
+        <div class="d-flex gap-2 align-items-start">
+          <input class="form-check-input mt-1 session-radio" type="radio" name="plex_session" tabindex="-1" aria-hidden="true">
+          <div class="flex-grow-1"><h3 class="h5 session-title mb-1"></h3><div class="session-owner text-muted small"></div></div>
+          <span class="badge bg-secondary state-badge"></span>
+        </div>
+        <div class="mt-3 timestamp-input"><span class="session-position"></span> / <span class="session-duration"></span></div>
+        <button type="button" class="btn btn-sm btn-outline-secondary preview-refresh d-none mt-3"><i class="fas fa-sync-alt"></i> Refresh still</button>
+      </div>`;
+    column.appendChild(card);
+    document.getElementById('session_list').appendChild(column);
+    const node = {
+      column, card, radio: card.querySelector('.session-radio'), title: card.querySelector('.session-title'),
+      owner: card.querySelector('.session-owner'), state: card.querySelector('.state-badge'),
+      position: card.querySelector('.session-position'), duration: card.querySelector('.session-duration'),
+      image: card.querySelector('.session-preview'), placeholder: card.querySelector('.preview-placeholder'),
+      refresh: card.querySelector('.preview-refresh'), previewMediaIdentity: null
+    };
+    const choose = () => selectSession(session.session_id);
+    card.addEventListener('click', event => { if (!event.target.closest('.preview-refresh')) choose(); });
+    card.addEventListener('keydown', event => {
+      if (event.key === 'Enter' || event.key === ' ') { event.preventDefault(); choose(); }
+      else if (['ArrowLeft', 'ArrowRight', 'ArrowUp', 'ArrowDown', 'Home', 'End'].includes(event.key)) {
+        event.preventDefault();
+        moveSessionFocus(session.session_id, event.key);
+      }
+    });
+    node.refresh.addEventListener('click', event => { event.stopPropagation(); refreshPreview(); });
+    sessionNodes.set(session.session_id, node);
+    updateSessionTabStops();
+    return node;
+  }
+
+  function updateSessionNode(session) {
+    const node = sessionNodes.get(session.session_id) || createSessionNode(session);
+    node.title.textContent = session.title;
+    node.owner.textContent = session.username + ' · ' + session.player_name + (session.player_product ? ' · ' + session.player_product : '');
+    node.state.textContent = session.state;
+    node.position.textContent = formatTimestamp(livePositionMs(session));
+    node.duration.textContent = formatTimestamp(session.duration_ms);
+    const isSelected = session.session_id === selectedSessionId;
+    node.card.classList.toggle('selected', isSelected);
+    node.card.setAttribute('aria-checked', String(isSelected));
+    node.radio.checked = isSelected;
+    node.refresh.classList.toggle('d-none', !isSelected);
+    if (node.previewMediaIdentity !== session.media_identity) loadPreview(session);
+  }
+
+  function renderSessions(sessions) {
+    const activeIds = new Set(sessions.map(session => session.session_id));
+    sessionNodes.forEach((node, id) => {
+      if (!activeIds.has(id)) { node.column.remove(); sessionNodes.delete(id); }
+    });
+    sessions.forEach(updateSessionNode);
+    updateSessionTabStops();
+    const empty = document.getElementById('session_empty');
+    empty.classList.toggle('d-none', sessions.length > 0);
+    if (!sessions.length) empty.textContent = 'No active Plex video sessions were found.';
+  }
+
+  function updateSelectedState() {
+    const session = selectedSession();
+    document.getElementById('current_position').textContent = session ? formatTimestamp(livePositionMs(session)) : '--:--:--.---';
+    const enabled = Boolean(session && capturedMediaIdentity === session.media_identity);
+    document.getElementById('clip_controls').classList.toggle('disabled', !enabled);
+    [startInput, endInput, document.getElementById('capture_start'), document.getElementById('capture_end'),
+      document.getElementById('refresh_position'), document.getElementById('clear_start'),
+      document.getElementById('clear_end'), ...document.querySelectorAll('.quick-time')]
+      .forEach(control => control.disabled = !enabled);
+    validateTimes();
+  }
+
+  function captureInitialStart(session) {
+    capturedMediaIdentity = session.media_identity;
+    startInput.value = formatTimestamp(livePositionMs(session));
+    endInput.value = '';
+    hideTrackRecovery();
+    updateSelectedState();
+    info.textContent = '';
+  }
+
+  function handleMediaChange(session) {
+    capturedMediaIdentity = session.media_identity;
+    startInput.value = '';
+    endInput.value = '';
+    hideTrackRecovery();
+    updateSelectedState();
+    info.innerHTML = '<div class="alert alert-info">The selected player changed videos. Use the Start copy button when you reach the new clip start.</div>';
+  }
+
+  async function selectSession(sessionId) {
+    if (sessionId === selectedSessionId && capturedMediaIdentity) return;
+    selectedSessionId = sessionId;
+    capturedMediaIdentity = null;
+    sessionsById.forEach(updateSessionNode);
+    updateSessionTabStops();
+    updateSelectedState();
+    await refreshSessions(true);
+    const session = selectedSession();
+    if (session) captureInitialStart(session);
+  }
+
+  async function refreshSessions(force = false) {
+    if (pollPromise) {
+      const current = await pollPromise;
+      if (!force) return current;
+      if (pollPromise) return pollPromise;
+    }
+    pollPromise = fetch('/api/sessions', {cache: 'no-store'})
+      .then(async response => {
+        const payload = await response.json();
+        if (!response.ok) throw new Error(payload.message || 'Could not load Plex sessions.');
+        const receivedAt = performance.now();
+        sessionsById = new Map((payload.sessions || []).map(session => {
+          const previous = sessionsById.get(session.session_id);
+          const reportedPosition = Number(session.view_offset_ms) || 0;
+          let anchorPosition = reportedPosition;
+          if (session.state === 'playing' && previous && previous.media_identity === session.media_identity) {
+            const previousPosition = livePositionMs(previous, receivedAt);
+            const reportedChange = reportedPosition - (Number(previous.view_offset_ms) || 0);
+            const looksLikeSeek = reportedChange < -250 || reportedChange > 5000;
+            if (!looksLikeSeek) {
+              anchorPosition = Math.max(reportedPosition, previousPosition);
+            }
+          }
+          session.client_anchor_position_ms = anchorPosition;
+          session.client_received_at_ms = receivedAt;
+          return [session.session_id, session];
+        }));
+        renderSessions(payload.sessions || []);
+        const current = selectedSession();
+        if (selectedSessionId && !current) {
+          updateSelectedState();
+          info.innerHTML = '<div class="alert alert-warning">The selected Plex session ended. Choose another session.</div>';
+        } else if (current && capturedMediaIdentity && current.media_identity !== capturedMediaIdentity) {
+          handleMediaChange(current);
+        } else if (current) updateSelectedState();
+        document.getElementById('session_refresh_status').textContent = 'Updated ' + new Date().toLocaleTimeString();
+        return current;
+      })
+      .catch(error => {
+        document.getElementById('session_refresh_status').textContent = 'Refresh failed';
+        info.innerHTML = '<div class="alert alert-danger"></div>';
+        info.querySelector('.alert').textContent = error.message;
+        return null;
+      })
+      .finally(() => { pollPromise = null; });
+    return pollPromise;
+  }
+
+  function loadPreview(session) {
+    const node = sessionNodes.get(session.session_id);
+    if (!node) return;
+    node.previewMediaIdentity = session.media_identity;
+    node.placeholder.classList.remove('d-none');
+    node.placeholder.innerHTML = '<span><i class="fas fa-spinner fa-spin"></i> Loading still…</span>';
+    node.image.classList.add('d-none');
+    const parameters = new URLSearchParams({
+      session_id: session.session_id, media_identity: session.media_identity,
+      at_ms: String(session.view_offset_ms), cache_bust: String(Date.now())
+    });
+    node.image.onload = () => { node.placeholder.classList.add('d-none'); node.image.classList.remove('d-none'); };
+    node.image.onerror = () => {
+      node.image.classList.add('d-none'); node.placeholder.classList.remove('d-none');
+      node.placeholder.textContent = 'Preview unavailable';
+    };
+    node.image.src = '/api/session-preview?' + parameters.toString();
+  }
+
+  async function refreshPreview() {
+    await refreshSessions(true);
+    const session = selectedSession();
+    if (session) loadPreview(session);
+  }
+
+  async function refreshLivePosition() {
+    await refreshSessions(true);
+    renderLivePositions();
+  }
+
+  async function captureStart() {
+    await refreshSessions(true);
+    const session = selectedSession();
+    if (!session || session.media_identity !== capturedMediaIdentity) return;
+    startInput.value = formatTimestamp(livePositionMs(session));
+    validateTimes();
+  }
+
+  async function captureEnd() {
+    await refreshSessions(true);
+    const session = selectedSession();
+    if (!session || session.media_identity !== capturedMediaIdentity) return;
+    endInput.value = formatTimestamp(livePositionMs(session));
+    validateTimes();
+  }
+
+  function renderLivePositions() {
+    const now = performance.now();
+    sessionsById.forEach(session => {
+      const node = sessionNodes.get(session.session_id);
+      if (node) node.position.textContent = formatTimestamp(livePositionMs(session, now));
+    });
+    const session = selectedSession();
+    document.getElementById('current_position').textContent = session
+      ? formatTimestamp(livePositionMs(session, now)) : '--:--:--.---';
+  }
+
+  function renderLivePositionsWhenVisible() {
+    const overlayOpen = !document.getElementById('job_progress_overlay').classList.contains('d-none');
+    if (!document.hidden && !overlayOpen) renderLivePositions();
+  }
+
+  function validateTimes() {
+    const session = selectedSession();
+    const start = parseTimestamp(startInput.value);
+    const end = parseTimestamp(endInput.value);
+    let message = '';
+    if (startInput.value && start === null) message = 'Start must use HH:MM:SS.mmm.';
+    else if (endInput.value && end === null) message = 'End must use HH:MM:SS.mmm.';
+    else if (start !== null && end !== null && end <= start) message = 'End must be later than Start.';
+    else if (session && end !== null && session.duration_ms && end > session.duration_ms) message = 'End is past the video duration.';
+    document.getElementById('time_error').textContent = message;
+    document.getElementById('create_video_btn').disabled = Boolean(
+      activeJobId || message || !session || session.media_identity !== capturedMediaIdentity || start === null || end === null
+    );
+    return !message && start !== null && end !== null;
+  }
+
+  function setEndAfter(seconds) {
+    const start = parseTimestamp(startInput.value);
+    const session = selectedSession();
+    if (start === null) return;
+    let end = start + Number(seconds) * 1000;
+    if (session && session.duration_ms) end = Math.min(end, session.duration_ms);
+    endInput.value = formatTimestamp(end);
+    validateTimes();
+  }
+
+  function requestPayload(overrides) {
+    return Object.assign({
+      session_id: selectedSessionId, media_identity: capturedMediaIdentity,
+      start_ms: parseTimestamp(startInput.value), end_ms: parseTimestamp(endInput.value)
+    }, overrides || {});
+  }
+
+  function startSessionPolling() {
+    if (!sessionPollTimer) sessionPollTimer = window.setInterval(refreshSessions, 1000);
+  }
+
+  function stopSessionPolling() {
+    if (sessionPollTimer) window.clearInterval(sessionPollTimer);
+    sessionPollTimer = null;
+  }
+
+  function formatElapsed(milliseconds) {
+    const totalSeconds = Math.floor((Number(milliseconds) || 0) / 1000);
+    const hours = Math.floor(totalSeconds / 3600);
+    const minutes = Math.floor((totalSeconds % 3600) / 60);
+    const seconds = totalSeconds % 60;
+    return (hours ? String(hours).padStart(2, '0') + ':' : '') +
+      String(minutes).padStart(2, '0') + ':' + String(seconds).padStart(2, '0');
+  }
+
+  function showProgressOverlay() {
+    stopSessionPolling();
+    const overlay = document.getElementById('job_progress_overlay');
+    overlay.classList.remove('d-none');
+    const bar = document.getElementById('job_progress_bar');
+    bar.classList.remove('bg-danger');
+    bar.classList.add('progress-bar-striped', 'progress-bar-animated');
+    document.getElementById('job_progress_dismiss').classList.add('d-none');
+    validateTimes();
+  }
+
+  function hideProgressOverlay() {
+    document.getElementById('job_progress_overlay').classList.add('d-none');
+    startSessionPolling();
+    validateTimes();
+  }
+
+  function updateProgressOverlay(job) {
+    const labels = {
+      queued: 'Queued', starting: 'Starting', validating: 'Checking Plex media',
+      preparing_subtitles: 'Preparing subtitles', rendering: 'Rendering video',
+      finalizing: 'Finalizing MP4', complete: 'Complete', failed: 'Failed'
+    };
+    const percent = Math.max(0, Math.min(100, Number(job.overall_progress) || 0));
+    const stagePercent = Math.max(0, Math.min(100, Number(job.stage_progress) || 0));
+    document.getElementById('job_progress_stage').textContent =
+      (labels[job.stage] || job.stage || 'Working') + (job.status === 'running' ? ' · ' + Math.round(stagePercent) + '% of stage' : '');
+    document.getElementById('job_progress_message').textContent = job.message || 'Creating the clip.';
+    document.getElementById('job_progress_percent').textContent = Math.round(percent) + '%';
+    const bar = document.getElementById('job_progress_bar');
+    bar.style.width = percent + '%';
+    bar.setAttribute('aria-valuenow', String(Math.round(percent)));
+    document.getElementById('job_progress_elapsed').textContent = 'Elapsed: ' + formatElapsed(job.elapsed_ms);
+    const queue = document.getElementById('job_progress_queue');
+    queue.classList.toggle('d-none', !job.queue_position);
+    queue.textContent = job.queue_position ? 'Queue position: ' + job.queue_position : '';
+  }
+
+  function clearActiveJob() {
+    if (jobPollTimer) window.clearTimeout(jobPollTimer);
+    jobPollTimer = null;
+    activeJobId = null;
+    localStorage.removeItem(ACTIVE_JOB_KEY);
+    validateTimes();
+  }
+
+  function showJobFailure(message, job) {
+    clearActiveJob();
+    showProgressOverlay();
+    updateProgressOverlay({
+      status: 'failed', stage: 'failed', message: message || 'Clip creation failed.',
+      overall_progress: job ? job.overall_progress : 100,
+      stage_progress: job ? job.stage_progress : 100,
+      elapsed_ms: job ? job.elapsed_ms : 0
+    });
+    const bar = document.getElementById('job_progress_bar');
+    bar.classList.remove('progress-bar-striped', 'progress-bar-animated');
+    bar.classList.add('bg-danger');
+    document.getElementById('job_progress_dismiss').classList.remove('d-none');
+    info.innerHTML = '<div class="alert alert-danger"></div>';
+    info.querySelector('.alert').textContent = message || 'Clip creation failed.';
+  }
+
+  function scheduleJobPoll() {
+    if (activeJobId && activeJobId !== 'submitting') {
+      jobPollTimer = window.setTimeout(pollActiveJob, 500);
     }
   }
-  $(".extraVideoDetails").hide();
-  function createVideo(){
-    var username = document.getElementById("username_input").value
-    var start_hour = document.getElementById("start_hour").value
-    var start_minute = document.getElementById("start_minute").value
-    var start_second = document.getElementById("start_second").value
-    var end_hour = document.getElementById("end_hour").value
-    var end_minute = document.getElementById("end_minute").value
-    var end_second = document.getElementById("end_second").value
-    const Http = new XMLHttpRequest();
-    const url="/create_video?username="+username+"&start_hour="+start_hour+"&start_minute="+start_minute+"&start_second="+start_second+"&end_hour="+end_hour+"&end_minute="+end_minute+"&end_second="+end_second
-    Http.open("POST", url, true)
-    $('#layoutSidenav').css({'filter': 'blur(8px)', '-webkit-filter': 'blur(8px)'})
-    $('body').append('<div style="" id="loadingDiv"><div class="loader"></div><div class="loaderSecondLine">Creating video...</div></div>');
-    Http.onload = function (e) {
-      if (Http.readyState === 4) {
-        if (Http.status === 200) {
-          console.log(Http.responseText);
-          location.reload();
-        } else {
-          $('#loadingDiv').remove()
-          $('#layoutSidenav').css({'filter': '', '-webkit-filter': ''})
-          $('#Info').text("Error: Video Creation: "+Http.statusText)
-          console.error(Http.statusText);
-        }
+
+  async function pollActiveJob() {
+    if (!activeJobId || activeJobId === 'submitting' || jobPollPromise) return;
+    const jobId = activeJobId;
+    jobPollPromise = fetch('/api/clip-jobs/' + encodeURIComponent(jobId), {cache: 'no-store'});
+    try {
+      const response = await jobPollPromise;
+      const job = await response.json();
+      if (response.status === 404) {
+        clearActiveJob();
+        hideProgressOverlay();
+        info.innerHTML = '<div class="alert alert-warning">The previous clip job is no longer available. The clip list has been refreshed.</div>';
+        await refreshCreatedClips();
+        return;
       }
-    };
-    Http.onerror = function (e) {
-      console.error(Http.statusText);
-    };
-    Http.send(null);
-  }
-  function removeStartTime(){
-    document.getElementById("start_hour").value = "";
-    document.getElementById("start_minute").value = "";
-    document.getElementById("start_second").value = "";
-  }
-  function removeEndTime(){
-    document.getElementById("end_hour").value = "";
-    document.getElementById("end_minute").value = "";
-    document.getElementById("end_second").value = "";
-  }
-  function upload_streamable(file){
-    const Http = new XMLHttpRequest();
-    const url='/streamable_upload?file_path='+file;
-    Http.open("POST", url, true);
-    $('#layoutSidenav').css({'filter': 'blur(8px)', '-webkit-filter': 'blur(8px)'})
-    $('body').append('<div style="" id="loadingDiv"><div class="loader"></div><div class="loaderSecondLine">Uploading video...</div></div>');
-    Http.onload = function (e) {
-      if (Http.readyState === 4) {
-        if (Http.status === 200) {
-          const obj = JSON.parse(Http.responseText);
-          $('#loadingDiv').remove()
-          $('#layoutSidenav').css({'filter': '', '-webkit-filter': ''})
-          $('#Info').text("Video uploaded to Streamable. URL: https://streamable.com/"+obj.shortcode)
-        } else {
-          console.error(Http.statusText);
-          $('#loadingDiv').remove()
-          $('#layoutSidenav').css({'filter': '', '-webkit-filter': ''})
-          $('#Info').text("Streamable: "+Http.statusText)
-        }
+      if (!response.ok) throw new Error(job.message || 'Could not read clip progress.');
+      showProgressOverlay();
+      updateProgressOverlay(job);
+      if (job.status === 'queued' || job.status === 'running') {
+        scheduleJobPoll();
+      } else if (job.status === 'succeeded') {
+        const clip = job.result && job.result.clip;
+        clearActiveJob();
+        hideProgressOverlay();
+        if (clip) prependClipCard(clip);
+        info.innerHTML = '<div class="alert alert-success">Clip created.</div>';
+      } else if (job.status === 'recovery_required') {
+        const recovery = job.error || {};
+        clearActiveJob();
+        hideProgressOverlay();
+        showTrackRecovery(recovery, recovery.retry_payload);
+      } else {
+        showJobFailure((job.error && job.error.message) || job.message, job);
       }
-    };
-    Http.send();
+    } catch (error) {
+      if (activeJobId === jobId) showJobFailure(error.message || 'Unable to read clip progress.');
+    } finally {
+      jobPollPromise = null;
+    }
   }
-  function remove_file(file){
-    const Http = new XMLHttpRequest();
-    const url='/remove_file?file_path='+file;
-    Http.open("POST", url);
-    Http.send();
-    location.reload();
+
+  async function createVideo(overrides, originalPayload) {
+    if (!originalPayload && !validateTimes()) return;
+    if (activeJobId) return;
+    const payload = Object.assign({}, originalPayload || requestPayload(), overrides || {});
+    activeJobId = 'submitting';
+    showProgressOverlay();
+    updateProgressOverlay({
+      status: 'queued', stage: 'queued', message: 'Submitting the clip job.',
+      overall_progress: 0, stage_progress: 0, elapsed_ms: 0
+    });
+    try {
+      const response = await fetch('/create_video', {
+        method: 'POST', headers: {'Content-Type': 'application/json'}, body: JSON.stringify(payload)
+      });
+      const result = await response.json();
+      if (!response.ok || !result.job_id) throw new Error(result.message || response.statusText);
+      activeJobId = result.job_id;
+      localStorage.setItem(ACTIVE_JOB_KEY, activeJobId);
+      await pollActiveJob();
+    } catch (error) {
+      showJobFailure(error.message || 'Unable to contact Clipplex.');
+    }
   }
-  function setting_table_visibility(){
-    var current_vis_status = document.getElementById("advanced_settings_table");
-    if (current_vis_status.style.display === "none") {
-      current_vis_status.style.display = "block";
+
+  function populateTrackSelect(id, tracks) {
+    const select = document.getElementById(id);
+    select.innerHTML = '';
+    (tracks || []).forEach(track => {
+      const option = document.createElement('option');
+      option.value = track.id; option.disabled = !track.available;
+      option.textContent = track.label + (track.selected ? ' (currently selected)' : '') +
+        (!track.available && track.unavailable_reason ? ' — ' + track.unavailable_reason : '');
+      option.selected = track.selected && track.available;
+      select.appendChild(option);
+    });
+    if (!select.value || select.options[select.selectedIndex].disabled) {
+      const available = (tracks || []).find(track => track.available);
+      if (available) select.value = available.id;
+    }
+    return (tracks || []).some(track => track.available);
+  }
+
+  function showTrackRecovery(response, payload) {
+    trackRecoveryContext = {response, payload};
+    document.getElementById('track_recovery_message').textContent = response.message;
+    const hasAudio = populateTrackSelect('recovery_audio', response.tracks.audio);
+    populateTrackSelect('recovery_subtitle', response.tracks.subtitles);
+    document.getElementById('retry_with_tracks').disabled = !hasAudio;
+    document.getElementById('track_recovery').classList.remove('d-none');
+  }
+
+  function hideTrackRecovery() {
+    trackRecoveryContext = null;
+    document.getElementById('track_recovery').classList.add('d-none');
+  }
+
+  function clipHeading(clip) {
+    return clip.show || clip.title || 'Clip';
+  }
+
+  function buildClipCard(clip) {
+    const column = document.createElement('div');
+    column.className = 'col-12 created-clip-card';
+
+    const card = document.createElement('div');
+    card.className = 'card';
+    const body = document.createElement('div');
+    body.className = 'card-body row g-3';
+    const mediaColumn = document.createElement('div');
+    mediaColumn.className = 'col-lg-9';
+    const video = document.createElement('video');
+    video.controls = true;
+    video.preload = 'metadata';
+    const source = document.createElement('source');
+    source.src = clip.file_path;
+    source.type = 'video/mp4';
+    video.appendChild(source);
+    mediaColumn.appendChild(video);
+
+    const details = document.createElement('div');
+    details.className = 'col-lg-3';
+    const heading = document.createElement('h3');
+    heading.className = 'h5';
+    heading.textContent = clipHeading(clip);
+    const metadata = document.createElement('p');
+    metadata.className = 'small text-muted';
+    const lines = [];
+    if (clip.show) {
+      lines.push((clip.title || '') + ' · S' + (clip.season_number || '') + 'E' + (clip.episode_number || ''));
+    }
+    lines.push('Started at ' + (clip.original_start_time || 'unknown'));
+    lines.push('Created by ' + (clip.username || 'unknown'));
+    metadata.textContent = lines.join('\n');
+    metadata.style.whiteSpace = 'pre-line';
+
+    const actions = document.createElement('div');
+    actions.className = 'd-flex gap-2';
+    const download = document.createElement('a');
+    download.className = 'btn btn-outline-primary';
+    download.href = clip.file_path;
+    download.download = '';
+    download.title = 'Download';
+    download.setAttribute('aria-label', 'Download clip');
+    download.innerHTML = '<i class="fas fa-download" aria-hidden="true"></i>';
+    const remove = document.createElement('button');
+    remove.type = 'button';
+    remove.className = 'btn btn-outline-danger remove-clip';
+    remove.dataset.file = JSON.stringify(clip.file_path);
+    remove.title = 'Delete';
+    remove.setAttribute('aria-label', 'Delete clip');
+    remove.innerHTML = '<i class="fas fa-trash-alt" aria-hidden="true"></i>';
+    const upload = document.createElement('button');
+    upload.type = 'button';
+    upload.className = 'btn btn-outline-secondary clip-upload d-none';
+    upload.dataset.file = JSON.stringify(clip.file_path);
+    upload.title = 'Upload clip';
+    upload.setAttribute('aria-label', 'Upload clip');
+    upload.innerHTML = '<i class="fas fa-share-square" aria-hidden="true"></i>';
+    actions.append(download, remove, upload);
+    details.append(heading, metadata, actions);
+    body.append(mediaColumn, details);
+    card.appendChild(body);
+    column.appendChild(card);
+    bindClipActions(column);
+    configureUploaderButtons(column);
+    return column;
+  }
+
+  function setEmptyClipMessage() {
+    const list = document.getElementById('created_clips_list');
+    if (!list.querySelector('.created-clip-card') && !document.getElementById('no_created_clips')) {
+      const empty = document.createElement('p');
+      empty.id = 'no_created_clips';
+      empty.className = 'text-muted';
+      empty.textContent = 'No clips have been created yet.';
+      list.appendChild(empty);
+    }
+  }
+
+  function uploaderConfiguration(id) {
+    return uploaderConfigurations.find(uploader => uploader.id === id) || null;
+  }
+
+  function configureUploaderButtons(root = document) {
+    root.querySelectorAll('.clip-upload').forEach(button => {
+      const available = uploaderConfigurations.length > 0;
+      button.classList.toggle('d-none', !available);
+      const onlyUploader = uploaderConfigurations.length === 1 ? uploaderConfigurations[0] : null;
+      const label = onlyUploader ? 'Upload to ' + onlyUploader.label : 'Upload clip';
+      button.title = label;
+      button.setAttribute('aria-label', label);
+    });
+  }
+
+  async function loadUploaderConfiguration() {
+    try {
+      const response = await fetch('/api/uploaders', {cache: 'no-store'});
+      const payload = await response.json();
+      uploaderConfigurations = response.ok && Array.isArray(payload.uploaders) ? payload.uploaders : [];
+    } catch (error) {
+      uploaderConfigurations = [];
+    }
+    configureUploaderButtons(document);
+  }
+
+  function filterUploadOptions(input, select) {
+    const query = input.value.trim().toLocaleLowerCase();
+    Array.from(select.options).forEach(option => {
+      option.hidden = Boolean(query && !option.text.toLocaleLowerCase().includes(query) && !option.selected);
+    });
+  }
+
+  function populateUploadOptions(select, items) {
+    select.replaceChildren();
+    (items || []).forEach(item => {
+      const option = document.createElement('option');
+      option.value = item.id;
+      option.textContent = item.name;
+      select.appendChild(option);
+    });
+  }
+
+  function renderNewImmichTags() {
+    const container = document.getElementById('immich_new_tag_chips');
+    container.replaceChildren();
+    newImmichTags.forEach(tag => {
+      const chip = document.createElement('span');
+      chip.className = 'badge rounded-pill bg-secondary upload-tag-chip';
+      const label = document.createElement('span');
+      label.textContent = tag;
+      const remove = document.createElement('button');
+      remove.type = 'button';
+      remove.className = 'btn-close btn-close-white';
+      remove.style.fontSize = '.55rem';
+      remove.setAttribute('aria-label', 'Remove tag ' + tag);
+      remove.addEventListener('click', () => {
+        newImmichTags = newImmichTags.filter(value => value !== tag);
+        renderNewImmichTags();
+      });
+      chip.append(label, remove);
+      container.appendChild(chip);
+    });
+  }
+
+  function addNewImmichTags() {
+    const input = document.getElementById('immich_new_tag');
+    String(input.value || '').split(',').forEach(rawTag => {
+      const tag = rawTag.trim();
+      if (tag && !newImmichTags.includes(tag)) newImmichTags.push(tag);
+    });
+    input.value = '';
+    renderNewImmichTags();
+  }
+
+  function resetUploadDialog() {
+    currentUploadFile = null;
+    immichOptionsReady = false;
+    newImmichTags = [];
+    renderNewImmichTags();
+    document.getElementById('upload_modal_status').replaceChildren();
+    document.getElementById('immich_tag_filter').value = '';
+    document.getElementById('immich_album_filter').value = '';
+    document.getElementById('immich_new_tag').value = '';
+    document.getElementById('immich_new_album').value = '';
+    document.getElementById('immich_tag_ids').replaceChildren();
+    document.getElementById('immich_album_ids').replaceChildren();
+    document.getElementById('immich_options_loading').textContent = 'Loading Immich tags and albums…';
+    document.getElementById('immich_options_loading').classList.remove('d-none');
+    document.getElementById('immich_options_fields').classList.add('d-none');
+    document.getElementById('immich_default_tag_notice').classList.add('d-none');
+  }
+
+  async function loadImmichOptions() {
+    immichOptionsReady = false;
+    document.getElementById('upload_submit').disabled = true;
+    document.getElementById('immich_options_loading').classList.remove('d-none');
+    document.getElementById('immich_options_fields').classList.add('d-none');
+    try {
+      const response = await fetch('/api/uploaders/immich/options', {cache: 'no-store'});
+      const payload = await response.json();
+      if (!response.ok) throw new Error(payload.message || 'Immich options are unavailable.');
+      populateUploadOptions(document.getElementById('immich_tag_ids'), payload.tags);
+      populateUploadOptions(document.getElementById('immich_album_ids'), payload.albums);
+      const notice = document.getElementById('immich_default_tag_notice');
+      if (payload.default_tag) {
+        notice.textContent = 'Always applied: ' + payload.default_tag;
+        notice.classList.remove('d-none');
+      } else {
+        notice.classList.add('d-none');
+      }
+      document.getElementById('immich_options_loading').classList.add('d-none');
+      document.getElementById('immich_options_fields').classList.remove('d-none');
+      immichOptionsReady = true;
+      updateUploadDialogForService();
+    } catch (error) {
+      document.getElementById('immich_options_loading').textContent = error.message;
+      showUploadNotice(document.getElementById('upload_modal_status'), {message: error.message}, true);
+    }
+  }
+
+  function updateUploadDialogForService() {
+    const uploaderId = document.getElementById('upload_service').value;
+    const immichSelected = uploaderId === 'immich';
+    document.getElementById('immich_upload_options').classList.toggle('d-none', !immichSelected);
+    document.getElementById('upload_submit').disabled = uploadInProgress || !uploaderId || (immichSelected && !immichOptionsReady);
+    if (immichSelected && !immichOptionsReady) loadImmichOptions();
+  }
+
+  function selectedOptionValues(selectId) {
+    return Array.from(document.getElementById(selectId).selectedOptions, option => option.value);
+  }
+
+  function showUploadNotice(target, payload, isError = false) {
+    target.replaceChildren();
+    const alert = document.createElement('div');
+    const partial = payload.result === 'partial_success';
+    alert.className = 'alert ' + (isError ? 'alert-danger' : partial ? 'alert-warning' : 'alert-success');
+    const message = document.createElement('div');
+    if (isError) {
+      message.textContent = payload.message || 'The upload failed.';
+    } else if (partial) {
+      message.textContent = 'The clip was uploaded, but some Immich metadata could not be applied.';
+    } else if (payload.uploader === 'immich' && payload.upload_status === 'duplicate') {
+      message.textContent = 'This clip already existed in Immich; the selected metadata was applied.';
     } else {
-      current_vis_status.style.display = "none";
+      message.textContent = 'Clip uploaded successfully.';
     }
+    alert.appendChild(message);
+    if (payload.url) {
+      const link = document.createElement('a');
+      link.href = payload.url;
+      link.target = '_blank';
+      link.rel = 'noopener noreferrer';
+      link.className = 'd-inline-block mt-2';
+      link.textContent = 'Open uploaded clip';
+      alert.appendChild(link);
+    }
+    if (Array.isArray(payload.failures) && payload.failures.length) {
+      const list = document.createElement('ul');
+      list.className = 'mb-0 mt-2';
+      payload.failures.forEach(failure => {
+        const item = document.createElement('li');
+        item.textContent = failure.message || 'A metadata step failed.';
+        list.appendChild(item);
+      });
+      alert.appendChild(list);
+    }
+    target.appendChild(alert);
   }
-  function add_time_to_end(add_time){
-    var start_hour = document.getElementById("start_hour").value
-    var start_minute = document.getElementById("start_minute").value
-    var start_second = document.getElementById("start_second").value
-    if (start_second) {
-      var start_time = start_hour+":"+start_minute+":"+start_second
-      const Http = new XMLHttpRequest();
-      Http.onload = function() {
-          var hour = this.responseText.split(":")[0]
-          var minute = this.responseText.split(":")[1]
-          var second = this.responseText.split(":")[2]
-          document.getElementById("end_hour").value = hour
-          document.getElementById("end_minute").value = minute
-          document.getElementById("end_second").value = second
+
+  function setUploadBusy(busy) {
+    uploadInProgress = busy;
+    document.querySelectorAll('.clip-upload').forEach(button => button.disabled = busy);
+    document.getElementById('upload_submit').disabled = busy;
+    document.getElementById('upload_submit').textContent = busy ? 'Uploading…' : 'Upload';
+  }
+
+  async function performUpload(file, uploaderId, metadata = {}, fromDialog = false) {
+    if (uploadInProgress) return;
+    setUploadBusy(true);
+    const statusTarget = fromDialog ? document.getElementById('upload_modal_status') : info;
+    statusTarget.textContent = 'Uploading clip to ' + (uploaderConfiguration(uploaderId)?.label || uploaderId) + '…';
+    try {
+      const response = await fetch('/api/uploads', {
+        method: 'POST',
+        headers: {'Content-Type': 'application/json'},
+        body: JSON.stringify({file_path: file, uploader: uploaderId, ...metadata})
+      });
+      let payload;
+      try { payload = await response.json(); }
+      catch (error) { payload = {message: 'The upload service returned an invalid response.'}; }
+      if (!response.ok) {
+        showUploadNotice(statusTarget, payload, true);
+        return;
       }
-      const url='/quick_add_time_to_start_time?start_time='+start_time+'&time_to_add='+add_time;
-      Http.open("POST", url);
-      Http.send();
+      if (fromDialog) bootstrap.Modal.getOrCreateInstance(document.getElementById('upload_modal')).hide();
+      showUploadNotice(info, payload, false);
+    } catch (error) {
+      showUploadNotice(statusTarget, {message: error.message || 'The upload request failed.'}, true);
+    } finally {
+      setUploadBusy(false);
+      updateUploadDialogForService();
     }
   }
-  function setAsStartTime(){
-    var current_time = document.getElementById("Current_time_value").innerHTML
-    var hour = current_time.split(":")[0]
-    var minute = current_time.split(":")[1]
-    var second = current_time.split(":")[2]
-    document.getElementById("start_hour").value = hour
-    document.getElementById("start_minute").value = minute
-    document.getElementById("start_second").value = second
+
+  function openUploadDialog(file) {
+    if (!uploaderConfigurations.length || uploadInProgress) return;
+    if (uploaderConfigurations.length === 1 && uploaderConfigurations[0].id === 'streamable') {
+      performUpload(file, 'streamable');
+      return;
+    }
+    resetUploadDialog();
+    currentUploadFile = file;
+    const selector = document.getElementById('upload_service');
+    selector.replaceChildren();
+    if (uploaderConfigurations.length > 1) {
+      const placeholder = document.createElement('option');
+      placeholder.value = '';
+      placeholder.textContent = 'Choose a service…';
+      selector.appendChild(placeholder);
+    }
+    uploaderConfigurations.forEach(uploader => {
+      const option = document.createElement('option');
+      option.value = uploader.id;
+      option.textContent = uploader.label;
+      selector.appendChild(option);
+    });
+    document.getElementById('upload_service_group').classList.toggle('d-none', uploaderConfigurations.length === 1);
+    selector.value = uploaderConfigurations.length === 1 ? uploaderConfigurations[0].id : '';
+    updateUploadDialogForService();
+    bootstrap.Modal.getOrCreateInstance(document.getElementById('upload_modal')).show();
   }
-  function check_stream(){
-      var username = document.getElementById("username_input").value;
-      const Http = new XMLHttpRequest();
-      Http.onload = function() {
-        const obj = JSON.parse(this.responseText);
-        if (obj.message) {
-          document.getElementById("Title").innerHTML = "<b>Error: </b>" + obj.message;
-          document.getElementById("Current_Time").innerHTML = "";
-        } else {
-        document.getElementById("Title").innerHTML = "<b>Title: </b>" + obj.media_title;
-        document.getElementById("Current_Time").innerHTML = "<b>Current time: </b>" + obj.current_time + " " + "<i id='set_current_time_as_start_time' class='fas fa-clipboard-check' onclick='setAsStartTime();'></i><br>";
-        document.getElementById("Current_time_value").innerHTML = obj.current_time
+
+  function bindClipActions(root) {
+    root.querySelectorAll('.remove-clip:not([data-bound])').forEach(button => {
+      button.dataset.bound = 'true';
+      button.addEventListener('click', async () => {
+        const response = await fetch('/remove_file?file_path=' + encodeURIComponent(JSON.parse(button.dataset.file)), {method: 'POST'});
+        if (!response.ok) {
+          info.innerHTML = '<div class="alert alert-danger">The clip could not be deleted.</div>';
+          return;
         }
-      }
-      const url='/get_current_stream?username='+username;
-      Http.open("POST", url);
-      Http.send();
+        const card = button.closest('.created-clip-card');
+        if (card) card.remove();
+        setEmptyClipMessage();
+      });
+    });
+    root.querySelectorAll('.clip-upload:not([data-bound])').forEach(button => {
+      button.dataset.bound = 'true';
+      button.addEventListener('click', () => openUploadDialog(JSON.parse(button.dataset.file)));
+    });
   }
+
+  function prependClipCard(clip) {
+    const list = document.getElementById('created_clips_list');
+    const empty = document.getElementById('no_created_clips');
+    if (empty) empty.remove();
+    list.prepend(buildClipCard(clip));
+  }
+
+  async function refreshCreatedClips() {
+    const response = await fetch('/api/clips', {cache: 'no-store'});
+    if (!response.ok) return;
+    const payload = await response.json();
+    const list = document.getElementById('created_clips_list');
+    list.replaceChildren();
+    (payload.clips || []).forEach(clip => list.appendChild(buildClipCard(clip)));
+    setEmptyClipMessage();
+  }
+
+  document.getElementById('refresh_position').addEventListener('click', refreshLivePosition);
+  document.getElementById('capture_start').addEventListener('click', captureStart);
+  document.getElementById('capture_end').addEventListener('click', captureEnd);
+  document.getElementById('create_video_btn').addEventListener('click', () => createVideo());
+  document.getElementById('clear_start').addEventListener('click', () => { startInput.value = ''; validateTimes(); });
+  document.getElementById('clear_end').addEventListener('click', () => { endInput.value = ''; validateTimes(); });
+  startInput.addEventListener('input', validateTimes);
+  endInput.addEventListener('input', validateTimes);
+  document.querySelectorAll('.quick-time').forEach(button =>
+    button.addEventListener('click', () => setEndAfter(button.dataset.seconds)));
+  document.getElementById('retry_with_tracks').addEventListener('click', () => {
+    if (!trackRecoveryContext) return;
+    createVideo({
+      audio_stream_id: document.getElementById('recovery_audio').value,
+      subtitle_stream_id: document.getElementById('recovery_subtitle').value
+    }, trackRecoveryContext.payload);
+  });
+  document.getElementById('cancel_track_retry').addEventListener('click', hideTrackRecovery);
+  document.getElementById('job_progress_dismiss').addEventListener('click', hideProgressOverlay);
+  document.getElementById('upload_service').addEventListener('change', updateUploadDialogForService);
+  document.getElementById('immich_tag_filter').addEventListener('input', event =>
+    filterUploadOptions(event.target, document.getElementById('immich_tag_ids')));
+  document.getElementById('immich_album_filter').addEventListener('input', event =>
+    filterUploadOptions(event.target, document.getElementById('immich_album_ids')));
+  document.getElementById('immich_add_tag').addEventListener('click', addNewImmichTags);
+  document.getElementById('immich_new_tag').addEventListener('keydown', event => {
+    if (event.key === 'Enter') {
+      event.preventDefault();
+      addNewImmichTags();
+    }
+  });
+  document.getElementById('upload_submit').addEventListener('click', () => {
+    const uploaderId = document.getElementById('upload_service').value;
+    if (!currentUploadFile || !uploaderId) return;
+    const metadata = uploaderId === 'immich' ? {
+      tag_ids: selectedOptionValues('immich_tag_ids'),
+      tag_names: newImmichTags,
+      album_ids: selectedOptionValues('immich_album_ids'),
+      new_album_name: document.getElementById('immich_new_album').value.trim()
+    } : {};
+    performUpload(currentUploadFile, uploaderId, metadata, true);
+  });
+  bindClipActions(document);
+  loadUploaderConfiguration();
+
+  if (activeJobId) {
+    showProgressOverlay();
+    updateProgressOverlay({
+      status: 'queued', stage: 'queued', message: 'Reconnecting to the active clip job.',
+      overall_progress: 0, stage_progress: 0, elapsed_ms: 0
+    });
+    pollActiveJob();
+  } else {
+    refreshSessions();
+    startSessionPolling();
+  }
+  window.setInterval(renderLivePositionsWhenVisible, 100);
+  document.addEventListener('visibilitychange', () => {
+    if (!document.hidden) renderLivePositionsWhenVisible();
+  });
 </script>
 {% endblock %}
