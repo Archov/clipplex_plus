@@ -2,7 +2,7 @@ FROM python:3.11-alpine3.22
 RUN apk --no-cache add build-base tzdata ffmpeg font-noto-all font-noto-cjk
 RUN ffmpeg -hide_banner -filters 2>&1 | grep -q " zscale " && \
     ffmpeg -hide_banner -filters 2>&1 | grep -q " tonemap "
-ENV TZ=America/New_York
+ENV TZ=America/Chicago
 ENV PYTHONDONTWRITEBYTECODE=1
 WORKDIR /app
 COPY requirements.txt /app/requirements.txt
