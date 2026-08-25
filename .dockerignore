@@ -1,0 +1,10 @@
+.git
+.gitignore
+.env
+.env.*
+!.env.sample
+__pycache__/
+*.py[cod]
+.pytest_cache/
+pytest-cache-files-*/
+app/static/media/*

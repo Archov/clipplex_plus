@@ -109,7 +109,7 @@
     <span id="session_refresh_status" class="text-muted small">Loading…</span>
   </div>
   <div id="session_empty" class="alert alert-secondary">Looking for active video sessions…</div>
-  <div id="session_list" class="row g-3"></div>
+  <div id="session_list" class="row g-3" role="radiogroup" aria-labelledby="sessions_heading"></div>
 </section>
 
 <section id="clip_controls" class="card mt-4 clip-controls disabled" aria-labelledby="clip_heading">
@@ -254,6 +254,30 @@
 
   function selectedSession() { return sessionsById.get(selectedSessionId) || null; }
 
+  function updateSessionTabStops() {
+    const firstSessionId = sessionNodes.keys().next().value || null;
+    const focusableSessionId = sessionNodes.has(selectedSessionId) ? selectedSessionId : firstSessionId;
+    sessionNodes.forEach((node, sessionId) => {
+      node.card.tabIndex = sessionId === focusableSessionId ? 0 : -1;
+    });
+  }
+
+  function moveSessionFocus(sessionId, key) {
+    const sessionIds = Array.from(sessionNodes.keys());
+    if (!sessionIds.length) return;
+    const currentIndex = Math.max(0, sessionIds.indexOf(sessionId));
+    let targetIndex = currentIndex;
+    if (key === 'Home') targetIndex = 0;
+    else if (key === 'End') targetIndex = sessionIds.length - 1;
+    else if (key === 'ArrowRight' || key === 'ArrowDown') targetIndex = (currentIndex + 1) % sessionIds.length;
+    else if (key === 'ArrowLeft' || key === 'ArrowUp') targetIndex = (currentIndex - 1 + sessionIds.length) % sessionIds.length;
+    const targetId = sessionIds[targetIndex];
+    const target = sessionNodes.get(targetId);
+    if (!target) return;
+    target.card.focus();
+    selectSession(targetId);
+  }
+
   function livePositionMs(session, now = performance.now()) {
     if (!session) return null;
     let position = Number(session.client_anchor_position_ms ?? session.view_offset_ms) || 0;
@@ -269,7 +293,7 @@
     column.className = 'col-md-6 col-xl-4';
     const card = document.createElement('div');
     card.className = 'card session-card h-100';
-    card.tabIndex = 0;
+    card.tabIndex = -1;
     card.setAttribute('role', 'radio');
     card.setAttribute('aria-checked', 'false');
     card.innerHTML = `
@@ -297,9 +321,14 @@
     card.addEventListener('click', event => { if (!event.target.closest('.preview-refresh')) choose(); });
     card.addEventListener('keydown', event => {
       if (event.key === 'Enter' || event.key === ' ') { event.preventDefault(); choose(); }
+      else if (['ArrowLeft', 'ArrowRight', 'ArrowUp', 'ArrowDown', 'Home', 'End'].includes(event.key)) {
+        event.preventDefault();
+        moveSessionFocus(session.session_id, event.key);
+      }
     });
     node.refresh.addEventListener('click', event => { event.stopPropagation(); refreshPreview(); });
     sessionNodes.set(session.session_id, node);
+    updateSessionTabStops();
     return node;
   }
 
@@ -324,6 +353,7 @@
       if (!activeIds.has(id)) { node.column.remove(); sessionNodes.delete(id); }
     });
     sessions.forEach(updateSessionNode);
+    updateSessionTabStops();
     const empty = document.getElementById('session_empty');
     empty.classList.toggle('d-none', sessions.length > 0);
     if (!sessions.length) empty.textContent = 'No active Plex video sessions were found.';
@@ -364,6 +394,7 @@
     selectedSessionId = sessionId;
     capturedMediaIdentity = null;
     sessionsById.forEach(updateSessionNode);
+    updateSessionTabStops();
     updateSelectedState();
     await refreshSessions(true);
     const session = selectedSession();
@@ -473,6 +504,11 @@
     const session = selectedSession();
     document.getElementById('current_position').textContent = session
       ? formatTimestamp(livePositionMs(session, now)) : '--:--:--.---';
+  }
+
+  function renderLivePositionsWhenVisible() {
+    const overlayOpen = !document.getElementById('job_progress_overlay').classList.contains('d-none');
+    if (!document.hidden && !overlayOpen) renderLivePositions();
   }
 
   function validateTimes() {
@@ -1101,6 +1137,9 @@
     refreshSessions();
     startSessionPolling();
   }
-  window.setInterval(renderLivePositions, 50);
+  window.setInterval(renderLivePositionsWhenVisible, 100);
+  document.addEventListener('visibilitychange', () => {
+    if (!document.hidden) renderLivePositionsWhenVisible();
+  });
 </script>
 {% endblock %}

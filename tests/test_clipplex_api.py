@@ -1,5 +1,6 @@
 import os
 from pathlib import Path
+import tempfile
 from types import SimpleNamespace
 import unittest
 from unittest.mock import Mock, patch
@@ -502,11 +503,36 @@ class VideoCommandTests(unittest.TestCase):
             raise requests.ConnectionError("download stopped")
 
         response.iter_content = failing_chunks
-        before = set(Path.cwd().glob("clipplex-subtitle-*.srt"))
-        with patch("clipplexAPI.requests.get", return_value=response):
-            with self.assertRaises(requests.ConnectionError):
-                video._download_external_subtitle()
-        self.assertEqual(set(Path.cwd().glob("clipplex-subtitle-*.srt")), before)
+        with tempfile.TemporaryDirectory() as temporary_directory:
+            created_path = None
+            real_named_temporary_file = tempfile.NamedTemporaryFile
+
+            def capture_temporary_file(*args, **kwargs):
+                nonlocal created_path
+                kwargs["dir"] = temporary_directory
+                temporary_file = real_named_temporary_file(*args, **kwargs)
+                created_path = Path(temporary_file.name)
+                return temporary_file
+
+            with patch("clipplexAPI.requests.get", return_value=response), \
+                    patch("clipplexAPI.tempfile.NamedTemporaryFile", side_effect=capture_temporary_file):
+                with self.assertRaises(requests.ConnectionError):
+                    video._download_external_subtitle()
+
+            self.assertIsNotNone(created_path)
+            self.assertFalse(created_path.exists())
+
+    def test_snapshot_ffmpeg_treats_media_path_as_one_argument(self):
+        media_path = "/data/media/movie; touch should-not-run.mkv"
+
+        with patch("clipplexAPI.subprocess.call") as call:
+            clipplexAPI.Snapshot(media_path, "00:01:02.345", 24)._download_frames()
+
+        command = call.call_args.args[0]
+        self.assertIsInstance(command, list)
+        self.assertEqual(command[command.index("-i") + 1], media_path)
+        self.assertNotIn("shell", call.call_args.kwargs)
+        self.assertEqual(command[command.index("-vframes") + 1], "24")
 
     def test_audio_encoding_failure_returns_audio_recovery(self):
         audio = clipplexAPI.MediaTrack("audio", 1, "audio")

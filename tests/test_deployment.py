@@ -1,0 +1,51 @@
+from pathlib import Path
+import unittest
+
+
+REPOSITORY_ROOT = Path(__file__).resolve().parents[1]
+
+
+class DeploymentConfigurationTests(unittest.TestCase):
+    def test_docker_image_does_not_bake_runtime_credentials(self):
+        dockerfile = (REPOSITORY_ROOT / "Dockerfile").read_text(encoding="utf-8")
+
+        self.assertNotIn("ARG PLEX_TOKEN", dockerfile)
+        self.assertNotIn("ENV PLEX_TOKEN", dockerfile)
+        self.assertNotIn("ARG STREAMABLE_PASSWORD", dockerfile)
+        self.assertNotIn("ENV STREAMABLE_PASSWORD", dockerfile)
+        self.assertIn("USER clipplex:clipplex", dockerfile)
+
+    def test_compose_maps_the_configured_runtime_identity(self):
+        compose = (REPOSITORY_ROOT / "docker-compose.yml").read_text(encoding="utf-8")
+        environment_sample = (REPOSITORY_ROOT / ".env.sample").read_text(encoding="utf-8")
+
+        self.assertIn('user: "${PUID:-1000}:${PGID:-1000}"', compose)
+        self.assertIn("PUID=1000", environment_sample)
+        self.assertIn("PGID=1000", environment_sample)
+        self.assertIn("TZ=America/Chicago", environment_sample)
+        self.assertIn("FFMPEG_PRESET=veryfast", environment_sample)
+        self.assertIn("${MEDIA_PATH}:/data/media:ro", compose)
+        self.assertIn("${CLIP_PATH}:/app/app/static/media", compose)
+
+    def test_docker_context_excludes_secrets_and_generated_media(self):
+        dockerignore = (REPOSITORY_ROOT / ".dockerignore").read_text(encoding="utf-8")
+
+        self.assertIn(".env.*", dockerignore)
+        self.assertIn("!.env.sample", dockerignore)
+        self.assertIn("app/static/media/*", dockerignore)
+
+    def test_readme_matches_the_compose_deployment_contract(self):
+        readme = (REPOSITORY_ROOT / "README.md").read_text(encoding="utf-8")
+
+        self.assertIn("`MEDIA_PATH`", readme)
+        self.assertIn("`CLIP_PATH`", readme)
+        self.assertIn("`PGID`", readme)
+        self.assertNotIn("`GUID`", readme)
+        self.assertIn("/data/media", readme)
+        self.assertIn("docker compose up -d --build", readme)
+        self.assertIn("Immich v1.135 or newer", readme)
+        self.assertIn("Run exactly one Clipplex application process", readme)
+
+
+if __name__ == "__main__":
+    unittest.main()

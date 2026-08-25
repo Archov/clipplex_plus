@@ -6,11 +6,13 @@ services:
     image: clipplex:local
     container_name: clipplex
     restart: unless-stopped
+    user: "${PUID:-1000}:${PGID:-1000}"
 
     environment:
       FLASK_APP: main.py
       PYTHONUNBUFFERED: "1"
-      TZ: America/Chicago
+      TZ: ${TZ:-America/Chicago}
+      FFMPEG_PRESET: ${FFMPEG_PRESET:-veryfast}
       PLEX_URL: ${PLEX_URL}
       PLEX_TOKEN: ${PLEX_TOKEN}
       STREAMABLE_LOGIN: ${STREAMABLE_LOGIN:-}
