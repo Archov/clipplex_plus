@@ -9,6 +9,7 @@ from app.media_files import (
     GIF_DIRECTORY,
     MediaFileError,
     gif_path_for_clip,
+    lock_for_clip,
     public_media_path,
     resolve_generated_clip,
 )
@@ -65,8 +66,14 @@ def _descriptor(gif_path: Path, cached: bool) -> dict:
 def cached_export(file_path: str):
     clip_path = _resolve_clip(file_path)
     gif_path = gif_path_for_clip(clip_path)
-    if _is_valid_cache(clip_path, gif_path):
-        return _descriptor(gif_path, True)
+    with lock_for_clip(clip_path):
+        if not clip_path.is_file():
+            raise GifExportError("The selected generated clip no longer exists.", 404)
+        try:
+            if _is_valid_cache(clip_path, gif_path):
+                return _descriptor(gif_path, True)
+        except FileNotFoundError:
+            return None
     return None
 
 
@@ -122,13 +129,17 @@ def _remove_temporary(path: Path) -> None:
 def export_gif(file_path: str, progress_callback=None) -> dict:
     clip_path = _resolve_clip(file_path)
     gif_path = gif_path_for_clip(clip_path)
-    if _is_valid_cache(clip_path, gif_path):
-        return {"result": "success", "export": _descriptor(gif_path, True)}
-
     GIF_DIRECTORY.mkdir(parents=True, exist_ok=True)
-    if gif_path.exists():
+    with lock_for_clip(clip_path):
+        if not clip_path.is_file():
+            raise GifExportError("The selected generated clip no longer exists.", 404)
         try:
-            gif_path.unlink()
+            if _is_valid_cache(clip_path, gif_path):
+                return {"result": "success", "export": _descriptor(gif_path, True)}
+            if gif_path.exists():
+                gif_path.unlink()
+        except FileNotFoundError:
+            pass
         except OSError as error:
             raise GifExportError("The stale GIF cache could not be replaced.") from error
 
@@ -155,13 +166,15 @@ def export_gif(file_path: str, progress_callback=None) -> dict:
                     "rendering_gif", start + span * percent / 100, percent, text
                 ),
             )
-            if not clip_path.is_file():
-                raise GifExportError("The source clip was deleted during GIF export.", 404)
             if temporary_path.is_file() and 0 < temporary_path.stat().st_size <= MAX_GIF_BYTES:
                 emit("finalizing_gif", 97, 50, "Caching the completed GIF.")
-                os.replace(temporary_path, gif_path)
+                with lock_for_clip(clip_path):
+                    if not clip_path.is_file():
+                        raise GifExportError("The source clip was deleted during GIF export.", 404)
+                    os.replace(temporary_path, gif_path)
+                    descriptor = _descriptor(gif_path, False)
                 emit("finalizing_gif", 99, 100, "The GIF is ready to download.")
-                return {"result": "success", "export": _descriptor(gif_path, False)}
+                return {"result": "success", "export": descriptor}
 
         raise GifExportError(
             "This clip cannot fit under the 9.5 MB share limit. Create a shorter clip and try again."

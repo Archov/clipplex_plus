@@ -1,6 +1,7 @@
 import os
 from pathlib import Path
 import shutil
+import threading
 import time
 import unittest
 from unittest.mock import patch
@@ -59,6 +60,13 @@ class GifExportTests(unittest.TestCase):
 
         os.utime(self.gif, (now + 3, now + 3))
         with patch.object(gif_exports, "MAX_GIF_BYTES", 2):
+            self.assertIsNone(gif_exports.cached_export(self.public_clip_path))
+
+    def test_disappearing_cached_gif_is_treated_as_a_cache_miss(self):
+        self.gif.write_bytes(b"gif")
+
+        with patch.object(gif_exports, "_is_valid_cache", return_value=True), \
+                patch.object(gif_exports, "_descriptor", side_effect=FileNotFoundError):
             self.assertIsNone(gif_exports.cached_export(self.public_clip_path))
 
     def test_falls_back_profiles_and_atomically_publishes_first_small_result(self):
@@ -136,6 +144,81 @@ class GifExportTests(unittest.TestCase):
 
         delete_generated_clip(self.public_clip_path)
 
+        self.assertFalse(self.clip.exists())
+        self.assertFalse(self.gif.exists())
+
+    def test_cached_gif_cleanup_failure_does_not_prevent_clip_deletion(self):
+        self.gif.write_bytes(b"gif")
+        real_unlink = Path.unlink
+
+        def fail_gif_unlink(path, missing_ok=False):
+            if path == self.gif:
+                raise PermissionError("GIF is locked")
+            return real_unlink(path, missing_ok=missing_ok)
+
+        with patch.object(Path, "unlink", new=fail_gif_unlink):
+            delete_generated_clip(self.public_clip_path)
+
+        self.assertFalse(self.clip.exists())
+        self.assertTrue(self.gif.exists())
+
+    def test_clip_deletion_cannot_race_with_final_gif_publication(self):
+        replace_started = threading.Event()
+        allow_replace = threading.Event()
+        delete_started = threading.Event()
+        delete_finished = threading.Event()
+        export_errors = []
+        delete_errors = []
+        real_replace = os.replace
+
+        def graph(_clip, output, _profile):
+            return output
+
+        def render(output, _duration, callback):
+            Path(output).write_bytes(b"gif")
+            callback(100)
+
+        def blocking_replace(source, destination):
+            replace_started.set()
+            allow_replace.wait(timeout=2)
+            real_replace(source, destination)
+
+        def run_export():
+            try:
+                gif_exports.export_gif(self.public_clip_path)
+            except Exception as error:
+                export_errors.append(error)
+
+        def run_delete():
+            delete_started.set()
+            try:
+                delete_generated_clip(self.public_clip_path)
+            except Exception as error:
+                delete_errors.append(error)
+            finally:
+                delete_finished.set()
+
+        with patch.object(gif_exports, "_duration_seconds", return_value=1), \
+                patch.object(gif_exports, "build_gif_graph", side_effect=graph), \
+                patch.object(gif_exports.clipplexAPI, "run_ffmpeg_with_progress", side_effect=render), \
+                patch.object(gif_exports.os, "replace", side_effect=blocking_replace):
+            exporter = threading.Thread(target=run_export)
+            exporter.start()
+            self.assertTrue(replace_started.wait(timeout=2))
+
+            deleter = threading.Thread(target=run_delete)
+            deleter.start()
+            self.assertTrue(delete_started.wait(timeout=2))
+            self.assertFalse(delete_finished.wait(timeout=0.05))
+
+            allow_replace.set()
+            exporter.join(timeout=2)
+            deleter.join(timeout=2)
+
+        self.assertFalse(exporter.is_alive())
+        self.assertFalse(deleter.is_alive())
+        self.assertEqual(export_errors, [])
+        self.assertEqual(delete_errors, [])
         self.assertFalse(self.clip.exists())
         self.assertFalse(self.gif.exists())
 
