@@ -135,6 +135,8 @@
     actions.className = 'clip-actions';
     actions.append(
       actionButton('Play', 'play', 'primary-action', () => openPlayer(clip)),
+      actionButton('Trim clip', 'cut', '', () => window.ClipTrimmer.open(clip, 'clip')),
+      actionButton('Extend from original', 'expand-alt', '', () => window.ClipTrimmer.open(clip, 'original')),
       actionButton('Edit details', 'pen', '', () => openEdit(clip)),
       actionButton('Export GIF', 'gif', '', () => exportGif(clip)),
     );
@@ -457,6 +459,18 @@
   byId('player_modal').addEventListener('hidden.bs.modal', () => { const player = byId('library_player'); player.pause(); player.removeAttribute('src'); player.removeAttribute('poster'); player.load(); });
   byId('library_upload_service').addEventListener('change', updateUploadOptions);
   byId('library_upload_submit').addEventListener('click', submitUpload);
+  document.addEventListener('clipplex:clip-saved', event => {
+    const result = event.detail || {};
+    if (!result.clip) return;
+    if (result.operation === 'replace') {
+      clips = clips.map(clip => clip.file_path === result.clip.file_path ? result.clip : clip);
+      notice('Clip replaced.');
+    } else {
+      clips = [result.clip, ...clips.filter(clip => clip.file_path !== result.clip.file_path)];
+      notice('Trimmed copy saved.');
+    }
+    render();
+  });
 
   render();
   loadUploaders();

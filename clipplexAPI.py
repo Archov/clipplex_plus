@@ -693,11 +693,15 @@ class Video:
         self.audio_track = audio_track
         self.subtitle_track = subtitle_track
         self.color_info = classify_video_color(plex_data)
+        self.output_max_width = 1920
+        self.output_max_height = 1080
+        self.output_crf = 18
+        self.output_preset = None
         self.output_path = f"{MEDIA_STATIC_PATH}/videos/{self.file_name}.mp4"
 
     @property
     def x264_preset(self) -> str:
-        preset = (os.environ.get("FFMPEG_PRESET") or "veryfast").lower()
+        preset = (self.output_preset or os.environ.get("FFMPEG_PRESET") or "veryfast").lower()
         if preset not in X264_PRESETS:
             LOGGER.warning("Ignoring invalid FFMPEG_PRESET=%r; using veryfast", preset)
             return "veryfast"
@@ -864,12 +868,12 @@ class Video:
         return video.filter("format", "yuv420p")
 
     @staticmethod
-    def _scale_for_compatibility(video):
+    def _scale_for_compatibility(video, max_width=1920, max_height=1080):
         """Fit inside 1920x1080 without upscaling, padding, or changing aspect ratio."""
         video = video.filter(
             "scale",
-            "min(1920,iw)",
-            "min(1080,ih)",
+            f"min({max_width},iw)",
+            f"min({max_height},ih)",
             force_original_aspect_ratio="decrease",
             force_divisible_by=2,
             flags="lanczos",
@@ -914,7 +918,7 @@ class Video:
         audio = media[str(self.audio_track.index)]
         if self.subtitle_track is not None:
             if not graphical_subtitle:
-                video = self._scale_for_compatibility(video)
+                video = self._scale_for_compatibility(video, self.output_max_width, self.output_max_height)
                 source_path = subtitle_path or self.media_path
                 if os.name == "nt":
                     source_path = os.path.relpath(source_path, os.getcwd()).replace("\\", "/")
@@ -938,10 +942,10 @@ class Video:
                 video = ffmpeg.overlay(video, media[str(self.subtitle_track.index)], eof_action="pass", repeatlast=0)
                 if preroll:
                     video = video.filter("trim", start=preroll, duration=self.duration)
-                video = self._scale_for_compatibility(video)
+                video = self._scale_for_compatibility(video, self.output_max_width, self.output_max_height)
                 video = video.filter("setpts", "PTS-STARTPTS")
         else:
-            video = self._scale_for_compatibility(video)
+            video = self._scale_for_compatibility(video, self.output_max_width, self.output_max_height)
             video = video.filter("setpts", "PTS-STARTPTS")
         if self.color_info.is_hdr:
             video = self._tag_bt709_output(video)
@@ -972,7 +976,7 @@ class Video:
             })
         return ffmpeg.output(
             video, audio, self.output_path, map_metadata=-1, vcodec="libx264", acodec="aac",
-            audio_bitrate="192k", ac=2, ar=48000, pix_fmt="yuv420p", crf=18, preset=self.x264_preset,
+            audio_bitrate="192k", ac=2, ar=48000, pix_fmt="yuv420p", crf=self.output_crf, preset=self.x264_preset,
             movflags="+faststart", **metadata,
         ).overwrite_output()
 

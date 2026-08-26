@@ -10,7 +10,7 @@ RUN python -m pip install --no-cache-dir -r requirements.txt
 RUN addgroup -S -g 1000 clipplex && \
     adduser -S -D -H -u 1000 -G clipplex clipplex
 COPY --chown=clipplex:clipplex . /app
-RUN mkdir -p /app/app/static/media/images /app/app/static/media/videos /app/app/static/media/gifs /app/app/static/media/thumbnails && \
+RUN mkdir -p /app/app/static/media/images /app/app/static/media/videos /app/app/static/media/gifs /app/app/static/media/thumbnails /app/app/static/media/previews /app/app/static/media/.clipplex/metadata /app/app/static/media/.clipplex/work && \
     chown -R clipplex:clipplex /app/app/static/media
 ENV PYTHONUNBUFFERED=1
 ENV FFMPEG_PRESET=veryfast

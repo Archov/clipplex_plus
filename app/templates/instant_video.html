@@ -208,6 +208,8 @@
                 {{ video['original_start_time'] }}–{{ video.get('original_end_time') or video['original_start_time'] }}<br>Created by {{ video['username'] }}
               </p>
               <div class="d-flex flex-wrap gap-2">
+                <button type="button" class="btn btn-outline-secondary trim-clip" data-clip='{{ video|tojson }}' title="Trim clip" aria-label="Trim clip"><i class="fas fa-cut" aria-hidden="true"></i></button>
+                <button type="button" class="btn btn-outline-secondary extend-clip" data-clip='{{ video|tojson }}' title="Extend from original" aria-label="Extend from original"><i class="fas fa-expand-alt" aria-hidden="true"></i></button>
                 <button type="button" class="btn btn-outline-success gif-export" data-file='{{ video["file_path"]|tojson }}' title="Export GIF" aria-label="Export GIF"><span class="gif-mark" aria-hidden="true">GIF</span></button>
                 <a class="btn btn-outline-primary" href="{{ video['file_path'] }}" download title="Download"><i class="fas fa-download"></i></a>
                 <button type="button" class="btn btn-outline-danger remove-clip" data-file='{{ video["file_path"]|tojson }}' data-heading='{{ (video.get("clip_title") or video.get("display_heading") or video.get("show") or video.get("title") or "Clip")|tojson }}' title="Delete"><i class="fas fa-trash-alt"></i></button>
@@ -224,6 +226,8 @@
 </section>
 <div class="page-bottom-action"><a class="btn btn-outline-primary btn-lg" href="/clip_library.html"><i class="fas fa-photo-video me-2" aria-hidden="true"></i>Open Library</a></div>
 
+{% include "_clip_trimmer.html" %}
+<script src="/static/js/clip_trimmer.js"></script>
 <script>
   const sessionNodes = new Map();
   let sessionsById = new Map();
@@ -810,6 +814,12 @@
 
     const actions = document.createElement('div');
     actions.className = 'd-flex flex-wrap gap-2';
+    const trim = document.createElement('button');
+    trim.type = 'button'; trim.className = 'btn btn-outline-secondary trim-clip'; trim.dataset.clip = JSON.stringify(clip);
+    trim.title = 'Trim clip'; trim.setAttribute('aria-label', 'Trim clip'); trim.innerHTML = '<i class="fas fa-cut" aria-hidden="true"></i>';
+    const extend = document.createElement('button');
+    extend.type = 'button'; extend.className = 'btn btn-outline-secondary extend-clip'; extend.dataset.clip = JSON.stringify(clip);
+    extend.title = 'Extend from original'; extend.setAttribute('aria-label', 'Extend from original'); extend.innerHTML = '<i class="fas fa-expand-alt" aria-hidden="true"></i>';
     const gifExport = document.createElement('button');
     gifExport.type = 'button';
     gifExport.className = 'btn btn-outline-success gif-export';
@@ -839,7 +849,7 @@
     upload.title = 'Upload clip';
     upload.setAttribute('aria-label', 'Upload clip');
     upload.innerHTML = '<i class="fas fa-share-square" aria-hidden="true"></i>';
-    actions.append(gifExport, download, remove, upload);
+    actions.append(trim, extend, gifExport, download, remove, upload);
     details.append(heading, metadata, actions);
     body.append(mediaColumn, details);
     card.appendChild(body);
@@ -1095,6 +1105,14 @@
   }
 
   function bindClipActions(root) {
+    root.querySelectorAll('.trim-clip:not([data-bound])').forEach(button => {
+      button.dataset.bound = 'true';
+      button.addEventListener('click', () => window.ClipTrimmer.open(JSON.parse(button.dataset.clip), 'clip'));
+    });
+    root.querySelectorAll('.extend-clip:not([data-bound])').forEach(button => {
+      button.dataset.bound = 'true';
+      button.addEventListener('click', () => window.ClipTrimmer.open(JSON.parse(button.dataset.clip), 'original'));
+    });
     root.querySelectorAll('.gif-export:not([data-bound])').forEach(button => {
       button.dataset.bound = 'true';
       button.addEventListener('click', () => exportGif(JSON.parse(button.dataset.file)));
@@ -1272,6 +1290,12 @@
   document.getElementById('latest_delete_modal').addEventListener('hidden.bs.modal', () => {
     window.clearTimeout(deleteActivationTimer);
     pendingDeletePath = null;
+  });
+  document.addEventListener('clipplex:clip-saved', event => {
+    const result = event.detail || {};
+    if (!result.clip) return;
+    prependClipCard(result.clip);
+    info.innerHTML = '<div class="alert alert-success">' + (result.operation === 'replace' ? 'Clip replaced.' : 'Trimmed copy saved.') + '</div>';
   });
   bindClipActions(document);
   loadUploaderConfiguration();

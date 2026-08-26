@@ -1,4 +1,5 @@
 import json
+import hashlib
 import os
 import re
 from datetime import datetime, timezone
@@ -12,6 +13,7 @@ from app.media_files import (
     THUMBNAIL_DIRECTORY,
     VIDEO_DIRECTORY,
     lock_for_clip,
+    legacy_metadata_path_for_clip,
     metadata_path_for_clip,
     public_media_path,
     resolve_generated_clip,
@@ -31,6 +33,14 @@ def _utc_timestamp(timestamp: float) -> str:
 
 def _read_sidecar(clip_path: Path) -> dict:
     metadata_path = metadata_path_for_clip(clip_path)
+    legacy_path = legacy_metadata_path_for_clip(clip_path)
+    if not metadata_path.is_file() and legacy_path.is_file():
+        try:
+            metadata_path.parent.mkdir(parents=True, exist_ok=True)
+            os.replace(legacy_path, metadata_path)
+        except OSError:
+            if not metadata_path.is_file():
+                metadata_path = legacy_path
     try:
         payload = json.loads(metadata_path.read_text(encoding="utf-8"))
         return payload if isinstance(payload, dict) else {}
@@ -200,12 +210,15 @@ def describe_clip(file_path, probe_data=None) -> dict:
     clip_title = stored_clip_title or _numbered_clip_title(_base_clip_title(source_details), clip_number)
 
     public_path = public_media_path(clip_path)
+    clip_stat = clip_path.stat()
+    revision = hashlib.sha256(f"{clip_stat.st_size}:{clip_stat.st_mtime_ns}".encode("ascii")).hexdigest()[:24]
     descriptor = {
         "file_path": public_path,
         "clip_title": clip_title,
         "clip_number": clip_number,
         "clip_title_custom": clip_title_custom,
         "source_key": _source_key(source_details),
+        "revision": revision,
         "title": title,
         "original_start_time": original_start_time,
         "original_end_time": original_end_time,
@@ -278,6 +291,7 @@ def _update_sidecar(file_path, updates: dict, created_at=None) -> None:
     clip_path = _resolve_clip_path(file_path)
     metadata_path = metadata_path_for_clip(clip_path)
     with lock_for_clip(clip_path):
+        metadata_path.parent.mkdir(parents=True, exist_ok=True)
         current = _read_sidecar(clip_path)
         current.update(updates)
         current["version"] = 1
@@ -348,6 +362,8 @@ def save_clip_metadata(file_path: str, payload: dict, initialize=False) -> dict:
             cleaned["clip_number"] = _positive_integer(cleaned["clip_number"])
             cleaned["clip_title"] = _clean(cleaned["clip_title"]) or identity["clip_title"]
             cleaned["clip_title_custom"] = bool(cleaned["clip_title_custom"])
+            if isinstance(payload.get("source"), dict):
+                cleaned["source"] = payload["source"]
         else:
             existing = describe_clip(clip_path)
             cleaned = _validated_metadata(payload)
@@ -371,8 +387,11 @@ def save_clip_metadata(file_path: str, payload: dict, initialize=False) -> dict:
                 "clip_title": requested_title if clip_title_custom else _numbered_clip_title(_base_clip_title(cleaned), clip_number),
                 "clip_title_custom": clip_title_custom,
             })
+            if isinstance(current.get("source"), dict):
+                cleaned["source"] = current["source"]
         cleaned["version"] = 1
         cleaned["created_at"] = _clean(current.get("created_at")) or _clean(payload.get("created_at")) or _utc_timestamp(clip_path.stat().st_mtime)
+        metadata_path.parent.mkdir(parents=True, exist_ok=True)
         temporary_path = metadata_path.with_name(metadata_path.name + ".tmp")
         temporary_path.write_text(json.dumps(cleaned, indent=2, sort_keys=True), encoding="utf-8")
         os.replace(temporary_path, metadata_path)

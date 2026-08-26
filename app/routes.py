@@ -3,7 +3,7 @@ from flask import render_template, redirect, request, jsonify, Response, send_fi
 from app import app
 from app.forms import video as formVideo
 from app.jobs import ClipJobManager, JobFailure, JobQueueFull
-from app import clip_library, gif_exports, uploaders
+from app import clip_library, clip_trims, gif_exports, uploaders
 from app.media_files import MediaFileError, delete_generated_clip
 import clipplexAPI
 
@@ -111,6 +111,49 @@ def clip_thumbnail():
         return response
     except MediaFileError as error:
         return jsonify({"result": "error", "message": error.message}), error.status_code
+
+
+@app.route("/api/clips/source-options", methods=["GET"])
+def clip_source_options():
+    try:
+        return jsonify(clip_trims.source_options(request.args.get("file_path")))
+    except MediaFileError as error:
+        return jsonify({"result": "error", "message": error.message}), error.status_code
+    except Exception:
+        app.logger.exception("Could not inspect original Plex source options")
+        return jsonify({"result": "error", "message": "Plex source options could not be loaded."}), 502
+
+
+@app.route("/api/clip-trims", methods=["POST"])
+def create_clip_trim():
+    try:
+        payload = clip_trims.validate_trim_payload(request.get_json(silent=True))
+        job_id = clip_job_manager.enqueue(payload)
+        return jsonify({
+            "result": "queued", "job_id": job_id, "job_type": "clip_trim",
+            "status_url": f"/api/jobs/{job_id}",
+        }), 202
+    except MediaFileError as error:
+        return jsonify({"result": "error", "message": error.message}), error.status_code
+    except JobQueueFull as error:
+        return jsonify({"result": "queue_full", "message": str(error)}), 429
+
+
+@app.route("/api/clip-extension-previews", methods=["POST"])
+def create_extension_preview():
+    try:
+        payload = clip_trims.validate_extension_preview_payload(request.get_json(silent=True))
+        job_id = clip_job_manager.enqueue(payload)
+        return jsonify({
+            "result": "queued", "job_id": job_id, "job_type": "extension_preview",
+            "status_url": f"/api/jobs/{job_id}",
+        }), 202
+    except MediaFileError as error:
+        return jsonify({"result": "error", "message": error.message}), error.status_code
+    except (TypeError, ValueError) as error:
+        return jsonify({"result": "error", "message": str(error)}), 400
+    except JobQueueFull as error:
+        return jsonify({"result": "queue_full", "message": str(error)}), 429
 
 
 @app.route("/api/uploaders", methods=["GET"])
@@ -386,6 +429,7 @@ def get_instant_video(
         "year": video.metadata_year,
     }
     clip_identity = clip_library.allocate_clip_title(source_metadata)
+    source_provenance = clip_trims.build_source_provenance(plex_data, audio_track, subtitle_track)
     video.metadata_clip_title = clip_identity["clip_title"]
     video.extract_video(progress)
     progress("finalizing", 99, 90, "Reading the completed clip metadata.")
@@ -395,6 +439,7 @@ def get_instant_video(
             **clip_identity,
             "original_start_time": video.metadata_current_media_time,
             "original_end_time": video.metadata_end_time,
+            "source": source_provenance,
         }, initialize=True)
         try:
             clip_library.ensure_thumbnail(clip["file_path"])
@@ -471,6 +516,22 @@ def run_media_job(payload, progress):
             raise JobFailure("failed", {
                 "result": "gif_export_failed",
                 "message": error.message,
+            }) from error
+    if payload.get("job_type") == "clip_trim":
+        try:
+            return clip_trims.run_trim_job(payload, progress)
+        except clip_trims.ClipTrimError as error:
+            raise JobFailure("failed", {
+                "result": "clip_trim_failed", "message": error.message,
+                "status_code": error.status_code,
+            }) from error
+    if payload.get("job_type") == "extension_preview":
+        try:
+            return clip_trims.run_extension_preview_job(payload, progress)
+        except clip_trims.ClipTrimError as error:
+            raise JobFailure("failed", {
+                "result": "extension_preview_failed", "message": error.message,
+                "status_code": error.status_code,
             }) from error
     return run_clip_job(payload, progress)
 

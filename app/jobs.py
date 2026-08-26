@@ -112,11 +112,11 @@ class ClipJobManager:
                 return False
             job["status"] = "running"
             job["stage"] = "starting"
-            job["message"] = (
-                "Starting GIF export."
-                if job["job_type"] == "gif_export"
-                else "Starting clip creation."
-            )
+            job["message"] = {
+                "gif_export": "Starting GIF export.",
+                "clip_trim": "Starting clip trim.",
+                "extension_preview": "Preparing original-source preview.",
+            }.get(job["job_type"], "Starting clip creation.")
             job["overall_progress"] = 1.0
             job["stage_progress"] = 0.0
             job["started_at"] = self.clock()
@@ -149,11 +149,11 @@ class ClipJobManager:
                 job = self.jobs[job_id]
                 job["status"] = "succeeded"
                 job["stage"] = "complete"
-                job["message"] = (
-                    "GIF ready."
-                    if job["job_type"] == "gif_export"
-                    else "Clip created."
-                )
+                job["message"] = {
+                    "gif_export": "GIF ready.",
+                    "clip_trim": "Trimmed clip ready.",
+                    "extension_preview": "Original-source preview ready.",
+                }.get(job["job_type"], "Clip created.")
                 job["overall_progress"] = 100.0
                 job["stage_progress"] = 100.0
                 job["result"] = deepcopy(result)

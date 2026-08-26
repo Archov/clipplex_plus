@@ -188,6 +188,12 @@ class CreateVideoRouteTests(unittest.TestCase):
         self.assertIn('id="list_view"', page)
         self.assertIn('id="grid_size"', page)
         self.assertIn("/static/js/clip_library.js", page)
+        self.assertIn("/static/js/clip_trimmer.js", page)
+        self.assertIn('id="clip_trim_modal"', page)
+        self.assertIn('id="clip_trim_start_range"', page)
+        self.assertIn('id="replace_trim_modal"', page)
+        self.assertNotIn('id="clip_source_select"', page)
+        self.assertNotIn("Choose a different source", page)
         self.assertIn('id="edit_custom_title"', page)
         self.assertLess(page.index('id="library_groups"'), page.index("Make a clip"))
         self.assertIn('aria-current="page"', page)
@@ -223,6 +229,30 @@ class CreateVideoRouteTests(unittest.TestCase):
 
         self.assertIn('class="btn btn-outline-success gif-export"', page)
         self.assertIn('aria-label="Export GIF"', page)
+        self.assertIn('class="btn btn-outline-secondary trim-clip"', page)
+        self.assertIn('class="btn btn-outline-secondary extend-clip"', page)
+
+    @patch("app.routes.clip_job_manager.enqueue", return_value="trim-job")
+    @patch("app.routes.clip_trims.validate_trim_payload")
+    def test_trim_endpoint_queues_validated_job(self, validate, enqueue):
+        validate.return_value = {"job_type": "clip_trim", "file_path": "static/media/videos/clip.mp4"}
+
+        response = self.client.post("/api/clip-trims", json={"file_path": "static/media/videos/clip.mp4"})
+
+        self.assertEqual(response.status_code, 202)
+        self.assertEqual(response.get_json()["job_type"], "clip_trim")
+        enqueue.assert_called_once_with(validate.return_value)
+
+    @patch("app.routes.clip_job_manager.enqueue", return_value="preview-job")
+    @patch("app.routes.clip_trims.validate_extension_preview_payload")
+    def test_extension_preview_endpoint_queues_validated_job(self, validate, enqueue):
+        validate.return_value = {"job_type": "extension_preview", "file_path": "static/media/videos/clip.mp4"}
+
+        response = self.client.post("/api/clip-extension-previews", json={"file_path": "static/media/videos/clip.mp4"})
+
+        self.assertEqual(response.status_code, 202)
+        self.assertEqual(response.get_json()["job_type"], "extension_preview")
+        enqueue.assert_called_once_with(validate.return_value)
 
     @patch("app.routes.get_instant_video")
     def test_track_failure_returns_retry_choices(self, create):
@@ -260,6 +290,7 @@ class CreateVideoRouteTests(unittest.TestCase):
         self.assertEqual(response.status_code, 422)
         self.assertEqual(response.get_json()["result"], "unsupported_video")
 
+    @patch("app.routes.clip_trims.build_source_provenance", return_value={"version": 1})
     @patch("app.routes.clip_library.allocate_clip_title", return_value={
         "source_key": "movie", "clip_number": 1,
         "clip_title": "Movie", "clip_title_custom": False,
@@ -268,7 +299,7 @@ class CreateVideoRouteTests(unittest.TestCase):
     @patch("app.routes.clip_library.save_clip_metadata", return_value={"file_path": "static/media/videos/clip.mp4"})
     @patch("app.routes.clipplexAPI.Video")
     @patch("app.routes.clipplexAPI.PlexInfo")
-    def test_clip_creation_passes_fractional_range_to_video(self, plex_info, video, save_metadata, thumbnail, allocate_title):
+    def test_clip_creation_passes_fractional_range_to_video(self, plex_info, video, save_metadata, thumbnail, allocate_title, source_provenance):
         plex_info.return_value = SimpleNamespace(
             media_identity="1", session_identifier="session-1", duration_ms=60000,
             username="alice", media_title="Movie", media_path="/media/movie.mkv",
@@ -292,6 +323,7 @@ class CreateVideoRouteTests(unittest.TestCase):
         save_metadata.assert_called_once()
         saved_fields = save_metadata.call_args.args[1]
         self.assertEqual(saved_fields["clip_title"], "Movie")
+        self.assertEqual(saved_fields["source"], {"version": 1})
         self.assertIs(saved_fields["original_start_time"], video.return_value.metadata_current_media_time)
         self.assertIs(saved_fields["original_end_time"], video.return_value.metadata_end_time)
         thumbnail.assert_called_once_with("static/media/videos/clip.mp4")

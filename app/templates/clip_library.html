@@ -165,6 +165,7 @@
 </div>
 
 <script id="clip_library_data" type="application/json">{{ clips|tojson }}</script>
+{% include "_clip_trimmer.html" %}
 {% endblock %}
 
-{% block scripts %}<script src="/static/js/clip_library.js"></script>{% endblock %}
+{% block scripts %}<script src="/static/js/clip_trimmer.js"></script><script src="/static/js/clip_library.js"></script>{% endblock %}
