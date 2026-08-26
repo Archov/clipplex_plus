@@ -861,7 +861,7 @@ class Video:
             force_divisible_by=2,
             flags="lanczos",
         )
-        return video.filter("setsar", "1")
+        return video
 
     @staticmethod
     def _tag_bt709_output(video):
