@@ -16,7 +16,7 @@ class DeploymentConfigurationTests(unittest.TestCase):
         self.assertIn("USER clipplex:clipplex", dockerfile)
         self.assertIn("/app/app/static/media/gifs", dockerfile)
 
-    def test_docker_image_uses_one_threaded_waitress_process(self):
+    def test_docker_image_uses_single_process_waitress_with_four_threads(self):
         dockerfile = (REPOSITORY_ROOT / "Dockerfile").read_text(encoding="utf-8")
         requirements = (REPOSITORY_ROOT / "requirements.txt").read_text(encoding="utf-8")
 
