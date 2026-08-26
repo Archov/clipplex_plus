@@ -3,25 +3,22 @@
 {% block content %}
 <style>
   .session-card { cursor: pointer; border: 2px solid transparent; transition: border-color .15s, box-shadow .15s; }
-  .session-card .card-body, .clip-controls .card-body, .video-library .card-body { color: #212529; }
+  .session-card .card-body, .clip-controls .card-body, .video-library .card-body { color: var(--clip-text); }
   .session-card:hover { border-color: #adb5bd; }
   .session-card.selected { border-color: #0d6efd; box-shadow: 0 0 0 .2rem rgba(13,110,253,.15); }
-  .session-preview { aspect-ratio: 16 / 9; width: 100%; object-fit: cover; background: #1f2428; }
-  .preview-placeholder { aspect-ratio: 16 / 9; display: grid; place-items: center; background: #1f2428; color: #adb5bd; }
+  .session-preview { aspect-ratio: 16 / 9; width: 100%; object-fit: cover; background: #07090d; border-radius: .65rem .65rem 0 0; }
+  .preview-placeholder { aspect-ratio: 16 / 9; display: grid; place-items: center; background: #07090d; color: var(--clip-muted); border-radius: .65rem .65rem 0 0; }
   .timestamp-input { font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; }
   .state-badge { text-transform: capitalize; }
   .clip-controls.disabled { opacity: .65; }
-  .video-library video { max-width: 100%; height: auto; }
+  .video-library video { display: block; width: 100%; max-width: 100%; height: auto; border-radius: .75rem; background: #000; }
   .job-progress-overlay { position: fixed; inset: 0; z-index: 2000; display: grid; place-items: center; padding: 1rem; }
   .job-progress-backdrop { position: absolute; inset: 0; background: rgba(15, 23, 31, .78); backdrop-filter: blur(5px); }
-  .job-progress-dialog { position: relative; width: min(560px, 100%); color: #212529; box-shadow: 0 1rem 3rem rgba(0,0,0,.35); }
+  .job-progress-dialog { position: relative; width: min(560px, 100%); color: var(--clip-text); box-shadow: 0 1rem 3rem rgba(0,0,0,.35); }
   .job-progress-bar { transition: width .2s linear; min-width: 0; }
   .upload-option-list { min-height: 9rem; }
   .upload-tag-chip { display: inline-flex; align-items: center; gap: .35rem; }
 </style>
-
-<h1 class="mt-4">Create a Plex Clip</h1>
-<div id="Info" class="mb-3" role="status" aria-live="polite"></div>
 
 <div id="job_progress_overlay" class="job-progress-overlay d-none" role="dialog" aria-modal="true" aria-labelledby="job_progress_title" aria-describedby="job_progress_message">
   <div class="job-progress-backdrop"></div>
@@ -43,6 +40,16 @@
         <span id="job_progress_queue" class="d-none"></span>
       </div>
       <button type="button" id="job_progress_dismiss" class="btn btn-secondary mt-3 d-none">Dismiss</button>
+    </div>
+  </div>
+</div>
+
+<div class="modal fade" id="latest_delete_modal" tabindex="-1" aria-labelledby="latest_delete_title" aria-describedby="latest_delete_message" aria-hidden="true">
+  <div class="modal-dialog modal-dialog-centered">
+    <div class="modal-content">
+      <div class="modal-header"><h2 class="modal-title h5" id="latest_delete_title">Delete clip?</h2><button type="button" class="btn-close btn-close-white" data-bs-dismiss="modal" aria-label="Close"></button></div>
+      <div class="modal-body"><p id="latest_delete_message" class="mb-2"></p><p class="small text-muted mb-0">The video and its cached GIF cannot be recovered.</p><div id="latest_delete_error" class="alert alert-danger d-none mt-3 mb-0" role="alert"></div></div>
+      <div class="modal-footer"><button id="latest_cancel_delete" type="button" class="btn btn-secondary" data-bs-dismiss="modal">Cancel</button><button id="latest_confirm_delete" type="button" class="btn btn-danger" disabled>Delete in 1…</button></div>
     </div>
   </div>
 </div>
@@ -111,6 +118,7 @@
   <div id="session_empty" class="alert alert-secondary">Looking for active video sessions…</div>
   <div id="session_list" class="row g-3" role="radiogroup" aria-labelledby="sessions_heading"></div>
 </section>
+<div id="Info" class="mt-3 mb-3" role="status" aria-live="polite"></div>
 
 <section id="clip_controls" class="card mt-4 clip-controls disabled" aria-labelledby="clip_heading">
   <div class="card-body">
@@ -184,7 +192,7 @@
 </div>
 
 <section class="video-library mt-5" aria-labelledby="clips_heading">
-  <h2 id="clips_heading" class="h4">Created Clips</h2>
+  <div class="d-flex justify-content-between align-items-center gap-3 mb-3"><div><p class="eyebrow mb-1">Just created</p><h2 id="clips_heading" class="h4 mb-0">Latest Clip</h2></div><a class="btn btn-sm btn-outline-secondary" href="/clip_library.html">View all clips</a></div>
   <div id="created_clips_list" class="row g-4">
     {% for video in videos %}
       <div class="col-12 created-clip-card">
@@ -194,15 +202,15 @@
               <video controls preload="metadata"><source src="{{ video['file_path'] }}" type="video/mp4"></video>
             </div>
             <div class="col-lg-3">
-              <h3 class="h5">{{ video['show'] or video['title'] or 'Clip' }}</h3>
+              <h3 class="h5">{{ video.get('clip_title') or video.get('display_heading') or video.get('show') or video.get('title') or 'Clip' }}</h3>
               <p class="small text-muted">
-                {% if video['show'] %}{{ video['title'] }} · S{{ video['season_number'] }}E{{ video['episode_number'] }}<br>{% endif %}
-                Started at {{ video['original_start_time'] }}<br>Created by {{ video['username'] }}
+                {% if video.get('media_type') == 'episode' or video.get('show') %}{{ video.get('display_subtitle') or video.get('title') or 'Untitled episode' }}<br>{% endif %}
+                {{ video['original_start_time'] }}–{{ video.get('original_end_time') or video['original_start_time'] }}<br>Created by {{ video['username'] }}
               </p>
               <div class="d-flex flex-wrap gap-2">
-                <button type="button" class="btn btn-outline-success gif-export" data-file='{{ video["file_path"]|tojson }}' title="Export GIF" aria-label="Export GIF"><i class="fas fa-file-image" aria-hidden="true"></i></button>
+                <button type="button" class="btn btn-outline-success gif-export" data-file='{{ video["file_path"]|tojson }}' title="Export GIF" aria-label="Export GIF"><span class="gif-mark" aria-hidden="true">GIF</span></button>
                 <a class="btn btn-outline-primary" href="{{ video['file_path'] }}" download title="Download"><i class="fas fa-download"></i></a>
-                <button type="button" class="btn btn-outline-danger remove-clip" data-file='{{ video["file_path"]|tojson }}' title="Delete"><i class="fas fa-trash-alt"></i></button>
+                <button type="button" class="btn btn-outline-danger remove-clip" data-file='{{ video["file_path"]|tojson }}' data-heading='{{ (video.get("clip_title") or video.get("display_heading") or video.get("show") or video.get("title") or "Clip")|tojson }}' title="Delete"><i class="fas fa-trash-alt"></i></button>
                 <button type="button" class="btn btn-outline-secondary clip-upload d-none" data-file='{{ video["file_path"]|tojson }}' title="Upload clip"><i class="fas fa-share-square"></i></button>
               </div>
             </div>
@@ -214,6 +222,7 @@
     {% endfor %}
   </div>
 </section>
+<div class="page-bottom-action"><a class="btn btn-outline-primary btn-lg" href="/clip_library.html"><i class="fas fa-photo-video me-2" aria-hidden="true"></i>Open Library</a></div>
 
 <script>
   const sessionNodes = new Map();
@@ -242,6 +251,8 @@
   let uploadInProgress = false;
   let immichOptionsReady = false;
   let newImmichTags = [];
+  let pendingDeletePath = null;
+  let deleteActivationTimer = null;
 
   function formatTimestamp(milliseconds) {
     const value = Math.max(0, Number(milliseconds) || 0);
@@ -759,7 +770,7 @@
   }
 
   function clipHeading(clip) {
-    return clip.show || clip.title || 'Clip';
+    return clip.clip_title || clip.display_heading || clip.show || clip.title || 'Clip';
   }
 
   function buildClipCard(clip) {
@@ -789,10 +800,10 @@
     const metadata = document.createElement('p');
     metadata.className = 'small text-muted';
     const lines = [];
-    if (clip.show) {
-      lines.push((clip.title || '') + ' · S' + (clip.season_number || '') + 'E' + (clip.episode_number || ''));
+    if (clip.media_type === 'episode' || clip.show) {
+      lines.push(clip.display_subtitle || clip.title || 'Untitled episode');
     }
-    lines.push('Started at ' + (clip.original_start_time || 'unknown'));
+    lines.push((clip.original_start_time || '00:00:00.000') + '–' + (clip.original_end_time || clip.original_start_time || '00:00:00.000'));
     lines.push('Created by ' + (clip.username || 'unknown'));
     metadata.textContent = lines.join('\n');
     metadata.style.whiteSpace = 'pre-line';
@@ -805,7 +816,7 @@
     gifExport.dataset.file = JSON.stringify(clip.file_path);
     gifExport.title = 'Export GIF';
     gifExport.setAttribute('aria-label', 'Export GIF');
-    gifExport.innerHTML = '<i class="fas fa-file-image" aria-hidden="true"></i>';
+    gifExport.innerHTML = '<span class="gif-mark" aria-hidden="true">GIF</span>';
     const download = document.createElement('a');
     download.className = 'btn btn-outline-primary';
     download.href = clip.file_path;
@@ -817,6 +828,7 @@
     remove.type = 'button';
     remove.className = 'btn btn-outline-danger remove-clip';
     remove.dataset.file = JSON.stringify(clip.file_path);
+    remove.dataset.heading = JSON.stringify(clipHeading(clip));
     remove.title = 'Delete';
     remove.setAttribute('aria-label', 'Delete clip');
     remove.innerHTML = '<i class="fas fa-trash-alt" aria-hidden="true"></i>';
@@ -1089,16 +1101,7 @@
     });
     root.querySelectorAll('.remove-clip:not([data-bound])').forEach(button => {
       button.dataset.bound = 'true';
-      button.addEventListener('click', async () => {
-        const response = await fetch('/remove_file?file_path=' + encodeURIComponent(JSON.parse(button.dataset.file)), {method: 'POST'});
-        if (!response.ok) {
-          info.innerHTML = '<div class="alert alert-danger">The clip could not be deleted.</div>';
-          return;
-        }
-        const card = button.closest('.created-clip-card');
-        if (card) card.remove();
-        setEmptyClipMessage();
-      });
+      button.addEventListener('click', () => openLatestDelete(button));
     });
     root.querySelectorAll('.clip-upload:not([data-bound])').forEach(button => {
       button.dataset.bound = 'true';
@@ -1108,9 +1111,7 @@
 
   function prependClipCard(clip) {
     const list = document.getElementById('created_clips_list');
-    const empty = document.getElementById('no_created_clips');
-    if (empty) empty.remove();
-    list.prepend(buildClipCard(clip));
+    list.replaceChildren(buildClipCard(clip));
   }
 
   async function refreshCreatedClips() {
@@ -1119,8 +1120,51 @@
     const payload = await response.json();
     const list = document.getElementById('created_clips_list');
     list.replaceChildren();
-    (payload.clips || []).forEach(clip => list.appendChild(buildClipCard(clip)));
+    (payload.clips || []).slice(0, 1).forEach(clip => list.appendChild(buildClipCard(clip)));
     setEmptyClipMessage();
+  }
+
+  function openLatestDelete(button) {
+    pendingDeletePath = JSON.parse(button.dataset.file);
+    const heading = button.dataset.heading ? JSON.parse(button.dataset.heading) : 'this clip';
+    window.clearTimeout(deleteActivationTimer);
+    document.getElementById('latest_delete_message').textContent = 'Delete “' + heading + '”?';
+    document.getElementById('latest_delete_error').classList.add('d-none');
+    const confirm = document.getElementById('latest_confirm_delete');
+    confirm.disabled = true;
+    confirm.textContent = 'Delete in 1…';
+    bootstrap.Modal.getOrCreateInstance(document.getElementById('latest_delete_modal')).show();
+    deleteActivationTimer = window.setTimeout(() => {
+      if (pendingDeletePath) {
+        confirm.disabled = false;
+        confirm.textContent = 'Delete clip';
+      }
+    }, 750);
+  }
+
+  async function confirmLatestDelete() {
+    if (!pendingDeletePath) return;
+    const path = pendingDeletePath;
+    const button = document.getElementById('latest_confirm_delete');
+    button.disabled = true;
+    button.textContent = 'Deleting…';
+    try {
+      const response = await fetch('/api/clips', {
+        method: 'DELETE', headers: {'Content-Type': 'application/json'}, body: JSON.stringify({file_path: path})
+      });
+      const result = await response.json();
+      if (!response.ok) throw new Error(result.message || 'The clip could not be deleted.');
+      pendingDeletePath = null;
+      bootstrap.Modal.getInstance(document.getElementById('latest_delete_modal')).hide();
+      await refreshCreatedClips();
+      info.innerHTML = '<div class="alert alert-success">Clip deleted.</div>';
+    } catch (error) {
+      const alert = document.getElementById('latest_delete_error');
+      alert.textContent = error.message;
+      alert.classList.remove('d-none');
+      button.disabled = false;
+      button.textContent = 'Try again';
+    }
   }
 
   function downloadGif(exported) {
@@ -1222,6 +1266,12 @@
       new_album_name: document.getElementById('immich_new_album').value.trim()
     } : {};
     performUpload(currentUploadFile, uploaderId, metadata, true);
+  });
+  document.getElementById('latest_confirm_delete').addEventListener('click', confirmLatestDelete);
+  document.getElementById('latest_delete_modal').addEventListener('shown.bs.modal', () => document.getElementById('latest_cancel_delete').focus());
+  document.getElementById('latest_delete_modal').addEventListener('hidden.bs.modal', () => {
+    window.clearTimeout(deleteActivationTimer);
+    pendingDeletePath = null;
   });
   bindClipActions(document);
   loadUploaderConfiguration();

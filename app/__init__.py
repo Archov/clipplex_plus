@@ -6,6 +6,7 @@ folders = [
     os.path.join(media_folder, "videos"),
     os.path.join(media_folder, "images"),
     os.path.join(media_folder, "gifs"),
+    os.path.join(media_folder, "thumbnails"),
 ]
 for folder in folders:
     os.makedirs(folder, exist_ok=True)

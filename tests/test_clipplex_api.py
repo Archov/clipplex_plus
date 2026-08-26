@@ -34,8 +34,8 @@ SESSION_XML = b"""
 """
 
 METADATA_XML = b"""
-<MediaContainer size="1">
-  <Video ratingKey="1" type="movie" title="Test Movie">
+<MediaContainer size="1" librarySectionTitle="Movies">
+  <Video ratingKey="1" type="movie" title="Test Movie" year="1933">
     <Media id="old-media"><Part id="11" file="/media/old.mkv" /></Media>
     <Media id="active-media">
       <Part id="22" file="/media/active.mkv">
@@ -92,6 +92,12 @@ class PlexInfoTests(unittest.TestCase):
         self.assertEqual(subtitle.subtitle_index, 1)
         self.assertEqual(subtitle.probe_codec, "hdmv_pgs_subtitle")
         self.assertTrue(subtitle.graphical)
+
+    def test_reads_library_name_and_movie_year(self):
+        plex = self.build_plex()
+
+        self.assertEqual(plex.media_library, "Movies")
+        self.assertEqual(plex.media_year, "1933")
 
     def test_resolves_exact_session_id_instead_of_first_matching_user(self):
         second = SESSION_XML.replace(b'session-1', b'session-2').replace(b'viewOffset="65000"', b'viewOffset="70123"')
@@ -316,6 +322,8 @@ class VideoCommandTests(unittest.TestCase):
         self.assertIn("-ss 60.123", command)
         self.assertIn("-t 2.345", command)
         self.assertIn("comment=00:01:00.123", command)
+        self.assertIn("clip_end_time=00:01:02.468", command)
+        self.assertIn("clip_title=Movie", command)
 
     def test_hdr10_is_tone_mapped_scaled_and_tagged_as_bt709(self):
         plex = self.make_plex({
