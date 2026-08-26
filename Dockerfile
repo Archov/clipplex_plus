@@ -12,8 +12,7 @@ RUN addgroup -S -g 1000 clipplex && \
 COPY --chown=clipplex:clipplex . /app
 RUN mkdir -p /app/app/static/media/images /app/app/static/media/videos /app/app/static/media/gifs && \
     chown -R clipplex:clipplex /app/app/static/media
-ENV FLASK_APP=main.py
 ENV PYTHONUNBUFFERED=1
 ENV FFMPEG_PRESET=veryfast
 USER clipplex:clipplex
-CMD ["python", "-m", "flask", "run", "--host=0.0.0.0", "--port=5000"]
+CMD ["waitress-serve", "--host=0.0.0.0", "--port=5000", "--threads=4", "main:app"]

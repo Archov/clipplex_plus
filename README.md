@@ -68,7 +68,9 @@ For a direct `docker run` deployment, build the image locally and pass `--user U
 
 ### Process model
 
-Clip and GIF jobs and their progress are stored in memory and processed by one worker thread. Run exactly one Clipplex application process. Do not configure multiple Gunicorn workers until the job queue and job state use shared storage.
+Clipplex is served by Waitress as one application process with four request threads. Clip and GIF jobs and their progress are stored in memory and processed by a separate worker thread. Run exactly one Clipplex application process; do not add process workers until the job queue and job state use shared storage.
+
+The published port is intended for a trusted LAN or VPN. Waitress does not provide authentication or HTTPS. Before exposing Clipplex to the internet, put it behind an authenticated HTTPS reverse proxy and configure trusted proxy headers explicitly.
 
 ## Exporting GIFs
 
