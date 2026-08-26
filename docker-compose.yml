@@ -9,7 +9,6 @@ services:
     user: "${PUID:-1000}:${PGID:-1000}"
 
     environment:
-      FLASK_APP: main.py
       PYTHONUNBUFFERED: "1"
       TZ: ${TZ:-America/Chicago}
       FFMPEG_PRESET: ${FFMPEG_PRESET:-veryfast}
