@@ -1,5 +1,7 @@
+from fractions import Fraction
 import os
 from pathlib import Path
+import shutil
 import tempfile
 from types import SimpleNamespace
 import unittest
@@ -367,6 +369,64 @@ class VideoCommandTests(unittest.TestCase):
         self.assertNotIn("tonemap=", command)
         self.assertIn("scale=min(1920\\,iw):min(1080\\,ih)", command)
         self.assertNotIn("-color_primaries", command)
+
+    @unittest.skipUnless(
+        shutil.which("ffmpeg") and shutil.which("ffprobe"),
+        "FFmpeg and FFprobe are required for scaler integration coverage",
+    )
+    def test_output_is_bounded_without_upscaling_letterboxing_or_distortion(self):
+        fixtures = (
+            ("smaller", 640, 360, "1/1", (640, 360), Fraction(16, 9)),
+            ("larger", 2560, 1440, "1/1", (1920, 1080), Fraction(16, 9)),
+            ("non_16_9", 2048, 1536, "1/1", (1440, 1080), Fraction(4, 3)),
+            ("odd_dimensions", 641, 359, "1/1", (640, 358), Fraction(641, 359)),
+            ("non_square_sar", 720, 480, "8/9", (720, 480), Fraction(4, 3)),
+        )
+
+        with tempfile.TemporaryDirectory() as temp_dir:
+            for name, width, height, sar, expected_size, expected_dar in fixtures:
+                with self.subTest(name=name):
+                    source_path = Path(temp_dir) / f"{name}-source.mkv"
+                    output_path = Path(temp_dir) / f"{name}-output.mkv"
+                    source = ffmpeg.input(
+                        f"testsrc=size={width}x{height}:rate=1:duration=0.1", f="lavfi"
+                    ).filter("setsar", sar)
+                    (
+                        ffmpeg.output(
+                            source,
+                            str(source_path),
+                            vcodec="ffv1",
+                            pix_fmt="yuv444p",
+                            vframes=1,
+                        )
+                        .overwrite_output()
+                        .run(quiet=True)
+                    )
+
+                    media = ffmpeg.input(str(source_path))
+                    scaled = clipplexAPI.Video._scale_for_compatibility(media.video)
+                    (
+                        ffmpeg.output(
+                            scaled,
+                            str(output_path),
+                            vcodec="ffv1",
+                            pix_fmt="yuv444p",
+                            vframes=1,
+                        )
+                        .overwrite_output()
+                        .run(quiet=True)
+                    )
+
+                    stream = ffmpeg.probe(str(output_path), select_streams="v:0")["streams"][0]
+                    actual_size = (stream["width"], stream["height"])
+                    actual_dar = Fraction(stream["display_aspect_ratio"].replace(":", "/"))
+
+                    self.assertEqual(actual_size, expected_size)
+                    self.assertEqual(actual_dar, expected_dar)
+                    self.assertLessEqual(actual_size[0], width)
+                    self.assertLessEqual(actual_size[1], height)
+                    self.assertEqual(actual_size[0] % 2, 0)
+                    self.assertEqual(actual_size[1] % 2, 0)
 
     def test_text_subtitles_are_burned_after_tone_mapping_and_scaling(self):
         plex = self.make_plex({"color_transfer": "smpte2084"})
