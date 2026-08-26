@@ -368,6 +368,19 @@ class VideoCommandTests(unittest.TestCase):
         self.assertIn("scale=min(1920\\,iw):min(1080\\,ih)", command)
         self.assertNotIn("-color_primaries", command)
 
+    def test_output_is_bounded_without_upscaling_or_letterboxing(self):
+        video = clipplexAPI.Video(
+            self.make_plex(), 0, 10, "clip", clipplexAPI.MediaTrack("audio", 1, "audio")
+        )
+
+        command = " ".join(ffmpeg.compile(video.build_ffmpeg()))
+
+        self.assertIn("scale=min(1920\\,iw):min(1080\\,ih)", command)
+        self.assertIn("force_original_aspect_ratio=decrease", command)
+        self.assertIn("force_divisible_by=2", command)
+        self.assertIn("setsar=1", command)
+        self.assertNotIn("pad=", command)
+
     def test_text_subtitles_are_burned_after_tone_mapping_and_scaling(self):
         plex = self.make_plex({"color_transfer": "smpte2084"})
         subtitle = clipplexAPI.MediaTrack("sub", 3, "subtitle", codec="ass", subtitle_index=0)

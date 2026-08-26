@@ -852,7 +852,8 @@ class Video:
 
     @staticmethod
     def _scale_for_compatibility(video):
-        return video.filter(
+        """Fit inside 1920x1080 without upscaling, padding, or changing aspect ratio."""
+        video = video.filter(
             "scale",
             "min(1920,iw)",
             "min(1080,ih)",
@@ -860,6 +861,7 @@ class Video:
             force_divisible_by=2,
             flags="lanczos",
         )
+        return video.filter("setsar", "1")
 
     @staticmethod
     def _tag_bt709_output(video):
