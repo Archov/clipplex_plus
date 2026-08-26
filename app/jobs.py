@@ -15,7 +15,7 @@ class JobQueueFull(Exception):
 
 class JobFailure(Exception):
     def __init__(self, status, error):
-        super().__init__(error.get("message") or "Clip creation failed.")
+        super().__init__(error.get("message") or "Media job failed.")
         self.status = status
         self.error = deepcopy(error)
 
@@ -39,11 +39,12 @@ class ClipJobManager:
         with self.condition:
             self._prune_locked()
             if len(self.queue) >= self.max_queue:
-                raise JobQueueFull("The clip queue is full. Try again after another clip finishes.")
+                raise JobQueueFull("The media queue is full. Try again after another job finishes.")
             now = self.clock()
             job_id = str(uuid.uuid4())
             self.jobs[job_id] = {
                 "job_id": job_id,
+                "job_type": payload.get("job_type", "clip") if isinstance(payload, dict) else "clip",
                 "status": "queued",
                 "stage": "queued",
                 "message": "Waiting for the renderer.",
@@ -77,6 +78,7 @@ class ClipJobManager:
                     queue_position = None
             return {
                 "job_id": job_id,
+                "job_type": job["job_type"],
                 "status": job["status"],
                 "stage": job["stage"],
                 "message": job["message"],
@@ -110,7 +112,11 @@ class ClipJobManager:
                 return False
             job["status"] = "running"
             job["stage"] = "starting"
-            job["message"] = "Starting clip creation."
+            job["message"] = (
+                "Starting GIF export."
+                if job["job_type"] == "gif_export"
+                else "Starting clip creation."
+            )
             job["overall_progress"] = 1.0
             job["stage_progress"] = 0.0
             job["started_at"] = self.clock()
@@ -130,7 +136,7 @@ class ClipJobManager:
                 job["error"] = deepcopy(error.error)
                 job["finished_at"] = self.clock()
         except Exception as error:
-            LOGGER.exception("Unhandled clip job failure")
+            LOGGER.exception("Unhandled media job failure")
             with self.condition:
                 job = self.jobs[job_id]
                 job["status"] = "failed"
@@ -143,7 +149,11 @@ class ClipJobManager:
                 job = self.jobs[job_id]
                 job["status"] = "succeeded"
                 job["stage"] = "complete"
-                job["message"] = "Clip created."
+                job["message"] = (
+                    "GIF ready."
+                    if job["job_type"] == "gif_export"
+                    else "Clip created."
+                )
                 job["overall_progress"] = 100.0
                 job["stage_progress"] = 100.0
                 job["result"] = deepcopy(result)

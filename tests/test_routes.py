@@ -159,6 +159,22 @@ class CreateVideoRouteTests(unittest.TestCase):
         self.assertIn('id="upload_modal"', page)
         self.assertIn("/api/uploaders/immich/options", page)
         self.assertIn("/api/uploads", page)
+        self.assertIn("Export GIF", page)
+        self.assertIn("/api/gif-exports", page)
+        self.assertIn("/api/jobs/", page)
+
+    @patch("app.routes.clipplexAPI.Utils.get_videos_in_folder")
+    def test_saved_clip_card_contains_gif_export_action(self, videos):
+        videos.return_value = [{
+            "file_path": "static/media/videos/clip.mp4", "title": "Clip", "show": "",
+            "original_start_time": "00:00:01.000", "username": "alice",
+            "episode_number": "", "season_number": "",
+        }]
+
+        page = self.client.get("/instant_video.html").get_data(as_text=True)
+
+        self.assertIn('class="btn btn-outline-success gif-export"', page)
+        self.assertIn('aria-label="Export GIF"', page)
 
     @patch("app.routes.get_instant_video")
     def test_track_failure_returns_retry_choices(self, create):
@@ -343,6 +359,65 @@ class CreateVideoRouteTests(unittest.TestCase):
         upload.assert_called_once_with(
             file_path="static/media/videos/clip.mp4", uploader="streamable"
         )
+
+    @patch("app.routes.gif_exports.cached_export")
+    def test_gif_export_returns_fresh_cached_file_without_queueing(self, cached):
+        cached.return_value = {
+            "download_url": "/static/media/gifs/clip.gif",
+            "filename": "clip.gif", "size_bytes": 123, "cached": True,
+        }
+
+        response = self.client.post("/api/gif-exports", json={
+            "file_path": "static/media/videos/clip.mp4",
+        })
+
+        self.assertEqual(response.status_code, 200)
+        self.assertTrue(response.get_json()["export"]["cached"])
+
+    @patch("app.routes.clip_job_manager.enqueue", return_value="gif-job-1")
+    @patch("app.routes.gif_exports.cached_export", return_value=None)
+    def test_gif_export_queues_conversion_with_generic_status_url(self, cached, enqueue):
+        response = self.client.post("/api/gif-exports", json={
+            "file_path": "static/media/videos/clip.mp4",
+        })
+
+        self.assertEqual(response.status_code, 202)
+        self.assertEqual(response.get_json()["job_type"], "gif_export")
+        self.assertEqual(response.get_json()["status_url"], "/api/jobs/gif-job-1")
+        self.assertEqual(enqueue.call_args.args[0]["job_type"], "gif_export")
+
+    @patch("app.routes.clip_job_manager.enqueue", side_effect=JobQueueFull("Queue is full."))
+    @patch("app.routes.gif_exports.cached_export", return_value=None)
+    def test_gif_export_returns_429_when_shared_queue_is_full(self, cached, enqueue):
+        response = self.client.post("/api/gif-exports", json={
+            "file_path": "static/media/videos/clip.mp4",
+        })
+
+        self.assertEqual(response.status_code, 429)
+        self.assertEqual(response.get_json()["result"], "queue_full")
+
+    @patch("app.routes.gif_exports.cached_export")
+    def test_gif_export_preserves_validation_status(self, cached):
+        cached.side_effect = __import__(
+            "app.gif_exports", fromlist=["GifExportError"]
+        ).GifExportError("Only saved clips may be exported.", 400)
+
+        response = self.client.post("/api/gif-exports", json={"file_path": "../secret"})
+
+        self.assertEqual(response.status_code, 400)
+        self.assertEqual(response.get_json()["result"], "error")
+
+    @patch("app.routes.gif_exports.export_gif")
+    def test_media_worker_dispatches_gif_jobs(self, export):
+        export.return_value = {"result": "success", "export": {"filename": "clip.gif"}}
+
+        import app.routes as routes
+        result = routes.run_media_job(
+            {"job_type": "gif_export", "file_path": "static/media/videos/clip.mp4"},
+            lambda *args: None,
+        )
+
+        self.assertEqual(result["export"]["filename"], "clip.gif")
 
 
 if __name__ == "__main__":

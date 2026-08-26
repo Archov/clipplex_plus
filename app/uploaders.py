@@ -5,9 +5,11 @@ from typing import Iterable
 
 import requests
 
+from app.media_files import MediaFileError, VIDEO_DIRECTORY, resolve_generated_clip
+
 
 APP_DIRECTORY = Path(__file__).resolve().parent
-CLIP_DIRECTORY = (APP_DIRECTORY / "static" / "media" / "videos").resolve()
+CLIP_DIRECTORY = VIDEO_DIRECTORY
 REQUEST_TIMEOUT = (15, 300)
 
 
@@ -47,17 +49,13 @@ def configured_uploader_ids() -> set[str]:
 
 
 def resolve_clip_path(file_path: str) -> Path:
-    if not isinstance(file_path, str) or not file_path.strip():
-        raise UploadError("Select a generated clip to upload.", 400)
-    relative_path = file_path.strip().lstrip("/\\")
-    candidate = (APP_DIRECTORY / relative_path).resolve()
     try:
-        candidate.relative_to(CLIP_DIRECTORY)
-    except ValueError as error:
-        raise UploadError("Only generated Clipplex videos may be uploaded.", 400) from error
-    if candidate.suffix.lower() != ".mp4" or not candidate.is_file():
-        raise UploadError("The selected generated clip no longer exists.", 404)
-    return candidate
+        return resolve_generated_clip(file_path)
+    except MediaFileError as error:
+        message = error.message.replace("may be used", "may be uploaded")
+        if not isinstance(file_path, str) or not file_path.strip():
+            message = "Select a generated clip to upload."
+        raise UploadError(message, error.status_code) from error
 
 
 def _deduplicate(values: Iterable[str]) -> list[str]:

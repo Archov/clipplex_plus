@@ -68,7 +68,15 @@ For a direct `docker run` deployment, build the image locally and pass `--user U
 
 ### Process model
 
-Clip jobs and progress are stored in memory and processed by one worker thread. Run exactly one Clipplex application process. Do not configure multiple Gunicorn workers until the job queue and job state use shared storage.
+Clip and GIF jobs and their progress are stored in memory and processed by one worker thread. Run exactly one Clipplex application process. Do not configure multiple Gunicorn workers until the job queue and job state use shared storage.
+
+## Exporting GIFs
+
+Every saved clip has an **Export GIF** action. Clipplex creates a silent, looping GIF and downloads it so it can be attached to services such as Discord or Facebook. GIF export runs in the same background queue as clip creation, so only one FFmpeg render runs at a time.
+
+Exports are automatically reduced through several resolution, frame-rate, and color profiles until they fit below 9.5 MB. If a long or visually complex clip cannot meet that limit, create a shorter clip and try again. GIF does not support audio.
+
+Successful exports are cached under `static/media/gifs` within the configured `CLIP_PATH` mount. Re-exporting an unchanged clip reuses the cached file. Deleting the MP4 clip also deletes its cached GIF; GIFs do not appear as separate items in the clip library.
 
 ## Authors
 

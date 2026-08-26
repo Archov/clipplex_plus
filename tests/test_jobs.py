@@ -37,6 +37,19 @@ class ClipJobManagerTests(unittest.TestCase):
         self.assertEqual(received[0]["nested"]["start_ms"], 123)
         self.assertEqual(manager.get(first)["status"], "succeeded")
         self.assertEqual(manager.get(first)["overall_progress"], 100.0)
+        self.assertEqual(manager.get(first)["job_type"], "clip")
+
+    def test_job_type_is_exposed_without_returning_the_payload(self):
+        manager = ClipJobManager(lambda payload, progress: {"ok": True}, start_worker=False)
+        job_id = manager.enqueue({"job_type": "gif_export", "file_path": "private.mp4"})
+
+        status = manager.get(job_id)
+
+        self.assertEqual(status["job_type"], "gif_export")
+        self.assertNotIn("payload", status)
+
+        manager.run_next()
+        self.assertEqual(manager.get(job_id)["message"], "GIF ready.")
 
     def test_queue_limit_counts_waiting_jobs(self):
         manager = ClipJobManager(lambda payload, progress: payload, max_queue=2, start_worker=False)
