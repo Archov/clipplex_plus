@@ -98,6 +98,8 @@ def run_ffmpeg_with_progress(graph, duration_seconds, progress_callback=None):
                 pass
         elif not separator or (key not in FFMPEG_PROGRESS_KEYS and not key.startswith("stream_")):
             error_lines.append(line)
+    if process.stdout is not None and hasattr(process.stdout, "close"):
+        process.stdout.close()
     return_code = process.wait()
     if return_code != 0:
         error_text = "\n".join(error_lines) or f"FFmpeg exited with status {return_code}."
@@ -1130,11 +1132,15 @@ class Utils:
         return [
             Utils.get_video_in_folder(os.path.join(folder, file_name))
             for file_name in os.listdir(folder)
+            if file_name.lower().endswith(".mp4")
+            and os.path.isfile(os.path.join(folder, file_name))
         ]
 
     def delete_file(self, file_path) -> bool:
+        from app.media_files import MediaFileError, delete_generated_clip
+
         try:
-            os.remove(f"./app/{file_path}")
+            delete_generated_clip(file_path)
             return True
-        except OSError:
+        except (MediaFileError, OSError):
             return False

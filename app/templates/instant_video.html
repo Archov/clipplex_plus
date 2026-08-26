@@ -199,7 +199,8 @@
                 {% if video['show'] %}{{ video['title'] }} · S{{ video['season_number'] }}E{{ video['episode_number'] }}<br>{% endif %}
                 Started at {{ video['original_start_time'] }}<br>Created by {{ video['username'] }}
               </p>
-              <div class="d-flex gap-2">
+              <div class="d-flex flex-wrap gap-2">
+                <button type="button" class="btn btn-outline-success gif-export" data-file='{{ video["file_path"]|tojson }}' title="Export GIF" aria-label="Export GIF"><i class="fas fa-file-image" aria-hidden="true"></i></button>
                 <a class="btn btn-outline-primary" href="{{ video['file_path'] }}" download title="Download"><i class="fas fa-download"></i></a>
                 <button type="button" class="btn btn-outline-danger remove-clip" data-file='{{ video["file_path"]|tojson }}' title="Delete"><i class="fas fa-trash-alt"></i></button>
                 <button type="button" class="btn btn-outline-secondary clip-upload d-none" data-file='{{ video["file_path"]|tojson }}' title="Upload clip"><i class="fas fa-share-square"></i></button>
@@ -221,8 +222,15 @@
   let capturedMediaIdentity = null;
   let pollPromise = null;
   let trackRecoveryContext = null;
-  const ACTIVE_JOB_KEY = 'clipplex.activeClipJob';
+  const ACTIVE_JOB_KEY = 'clipplex.activeMediaJob';
+  const LEGACY_ACTIVE_JOB_KEY = 'clipplex.activeClipJob';
+  const ACTIVE_JOB_TYPE_KEY = 'clipplex.activeMediaJobType';
   let activeJobId = localStorage.getItem(ACTIVE_JOB_KEY);
+  if (!activeJobId) {
+    activeJobId = localStorage.getItem(LEGACY_ACTIVE_JOB_KEY);
+    if (activeJobId) localStorage.setItem(ACTIVE_JOB_KEY, activeJobId);
+  }
+  let activeJobType = localStorage.getItem(ACTIVE_JOB_TYPE_KEY) || 'clip';
   let jobPollPromise = null;
   let jobPollTimer = null;
   let sessionPollTimer = null;
@@ -524,6 +532,7 @@
     document.getElementById('create_video_btn').disabled = Boolean(
       activeJobId || message || !session || session.media_identity !== capturedMediaIdentity || start === null || end === null
     );
+    document.querySelectorAll('.gif-export').forEach(button => button.disabled = Boolean(activeJobId));
     return !message && start !== null && end !== null;
   }
 
@@ -580,16 +589,22 @@
   }
 
   function updateProgressOverlay(job) {
+    const jobType = job.job_type || activeJobType || 'clip';
     const labels = {
       queued: 'Queued', starting: 'Starting', validating: 'Checking Plex media',
       preparing_subtitles: 'Preparing subtitles', rendering: 'Rendering video',
-      finalizing: 'Finalizing MP4', complete: 'Complete', failed: 'Failed'
+      finalizing: 'Finalizing MP4', preparing_gif: 'Preparing GIF',
+      rendering_gif: 'Rendering GIF', finalizing_gif: 'Finalizing GIF',
+      complete: 'Complete', failed: 'Failed'
     };
+    document.getElementById('job_progress_title').textContent =
+      jobType === 'gif_export' ? 'Exporting GIF' : 'Creating clip';
     const percent = Math.max(0, Math.min(100, Number(job.overall_progress) || 0));
     const stagePercent = Math.max(0, Math.min(100, Number(job.stage_progress) || 0));
     document.getElementById('job_progress_stage').textContent =
       (labels[job.stage] || job.stage || 'Working') + (job.status === 'running' ? ' · ' + Math.round(stagePercent) + '% of stage' : '');
-    document.getElementById('job_progress_message').textContent = job.message || 'Creating the clip.';
+    document.getElementById('job_progress_message').textContent = job.message ||
+      (jobType === 'gif_export' ? 'Exporting the GIF.' : 'Creating the clip.');
     document.getElementById('job_progress_percent').textContent = Math.round(percent) + '%';
     const bar = document.getElementById('job_progress_bar');
     bar.style.width = percent + '%';
@@ -604,15 +619,22 @@
     if (jobPollTimer) window.clearTimeout(jobPollTimer);
     jobPollTimer = null;
     activeJobId = null;
+    activeJobType = 'clip';
     localStorage.removeItem(ACTIVE_JOB_KEY);
+    localStorage.removeItem(LEGACY_ACTIVE_JOB_KEY);
+    localStorage.removeItem(ACTIVE_JOB_TYPE_KEY);
     validateTimes();
   }
 
   function showJobFailure(message, job) {
+    const failureJobType = (job && job.job_type) || activeJobType;
+    const fallbackMessage = failureJobType === 'gif_export' ?
+      'GIF export failed.' : 'Clip creation failed.';
     clearActiveJob();
     showProgressOverlay();
     updateProgressOverlay({
-      status: 'failed', stage: 'failed', message: message || 'Clip creation failed.',
+      status: 'failed', stage: 'failed', message: message || fallbackMessage,
+      job_type: failureJobType,
       overall_progress: job ? job.overall_progress : 100,
       stage_progress: job ? job.stage_progress : 100,
       elapsed_ms: job ? job.elapsed_ms : 0
@@ -622,7 +644,7 @@
     bar.classList.add('bg-danger');
     document.getElementById('job_progress_dismiss').classList.remove('d-none');
     info.innerHTML = '<div class="alert alert-danger"></div>';
-    info.querySelector('.alert').textContent = message || 'Clip creation failed.';
+    info.querySelector('.alert').textContent = message || fallbackMessage;
   }
 
   function scheduleJobPoll() {
@@ -634,28 +656,34 @@
   async function pollActiveJob() {
     if (!activeJobId || activeJobId === 'submitting' || jobPollPromise) return;
     const jobId = activeJobId;
-    jobPollPromise = fetch('/api/clip-jobs/' + encodeURIComponent(jobId), {cache: 'no-store'});
+    jobPollPromise = fetch('/api/jobs/' + encodeURIComponent(jobId), {cache: 'no-store'});
     try {
       const response = await jobPollPromise;
       const job = await response.json();
       if (response.status === 404) {
         clearActiveJob();
         hideProgressOverlay();
-        info.innerHTML = '<div class="alert alert-warning">The previous clip job is no longer available. The clip list has been refreshed.</div>';
+        info.innerHTML = '<div class="alert alert-warning">The previous media job is no longer available. The clip list has been refreshed.</div>';
         await refreshCreatedClips();
         return;
       }
-      if (!response.ok) throw new Error(job.message || 'Could not read clip progress.');
+      if (!response.ok) throw new Error(job.message || 'Could not read media progress.');
+      activeJobType = job.job_type || activeJobType;
       showProgressOverlay();
       updateProgressOverlay(job);
       if (job.status === 'queued' || job.status === 'running') {
         scheduleJobPoll();
       } else if (job.status === 'succeeded') {
         const clip = job.result && job.result.clip;
+        const gifExport = job.result && job.result.export;
         clearActiveJob();
         hideProgressOverlay();
-        if (clip) prependClipCard(clip);
-        info.innerHTML = '<div class="alert alert-success">Clip created.</div>';
+        if (gifExport) {
+          downloadGif(gifExport);
+        } else {
+          if (clip) prependClipCard(clip);
+          info.innerHTML = '<div class="alert alert-success">Clip created.</div>';
+        }
       } else if (job.status === 'recovery_required') {
         const recovery = job.error || {};
         clearActiveJob();
@@ -676,6 +704,7 @@
     if (activeJobId) return;
     const payload = Object.assign({}, originalPayload || requestPayload(), overrides || {});
     activeJobId = 'submitting';
+    activeJobType = 'clip';
     showProgressOverlay();
     updateProgressOverlay({
       status: 'queued', stage: 'queued', message: 'Submitting the clip job.',
@@ -688,7 +717,9 @@
       const result = await response.json();
       if (!response.ok || !result.job_id) throw new Error(result.message || response.statusText);
       activeJobId = result.job_id;
+      activeJobType = result.job_type || 'clip';
       localStorage.setItem(ACTIVE_JOB_KEY, activeJobId);
+      localStorage.setItem(ACTIVE_JOB_TYPE_KEY, activeJobType);
       await pollActiveJob();
     } catch (error) {
       showJobFailure(error.message || 'Unable to contact Clipplex.');
@@ -767,7 +798,14 @@
     metadata.style.whiteSpace = 'pre-line';
 
     const actions = document.createElement('div');
-    actions.className = 'd-flex gap-2';
+    actions.className = 'd-flex flex-wrap gap-2';
+    const gifExport = document.createElement('button');
+    gifExport.type = 'button';
+    gifExport.className = 'btn btn-outline-success gif-export';
+    gifExport.dataset.file = JSON.stringify(clip.file_path);
+    gifExport.title = 'Export GIF';
+    gifExport.setAttribute('aria-label', 'Export GIF');
+    gifExport.innerHTML = '<i class="fas fa-file-image" aria-hidden="true"></i>';
     const download = document.createElement('a');
     download.className = 'btn btn-outline-primary';
     download.href = clip.file_path;
@@ -789,7 +827,7 @@
     upload.title = 'Upload clip';
     upload.setAttribute('aria-label', 'Upload clip');
     upload.innerHTML = '<i class="fas fa-share-square" aria-hidden="true"></i>';
-    actions.append(download, remove, upload);
+    actions.append(gifExport, download, remove, upload);
     details.append(heading, metadata, actions);
     body.append(mediaColumn, details);
     card.appendChild(body);
@@ -1045,6 +1083,10 @@
   }
 
   function bindClipActions(root) {
+    root.querySelectorAll('.gif-export:not([data-bound])').forEach(button => {
+      button.dataset.bound = 'true';
+      button.addEventListener('click', () => exportGif(JSON.parse(button.dataset.file)));
+    });
     root.querySelectorAll('.remove-clip:not([data-bound])').forEach(button => {
       button.dataset.bound = 'true';
       button.addEventListener('click', async () => {
@@ -1079,6 +1121,64 @@
     list.replaceChildren();
     (payload.clips || []).forEach(clip => list.appendChild(buildClipCard(clip)));
     setEmptyClipMessage();
+  }
+
+  function downloadGif(exported) {
+    const download = document.createElement('a');
+    download.href = exported.download_url;
+    download.download = exported.filename || '';
+    download.className = 'alert-link';
+    download.textContent = 'Download GIF again';
+
+    const notice = document.createElement('div');
+    notice.className = 'alert alert-success';
+    notice.append(document.createTextNode(
+      (exported.cached ? 'Cached GIF ready. ' : 'GIF exported. ') +
+      'Your download should begin automatically. '
+    ), download);
+    info.replaceChildren(notice);
+
+    const automaticDownload = document.createElement('a');
+    automaticDownload.href = exported.download_url;
+    automaticDownload.download = exported.filename || '';
+    automaticDownload.className = 'd-none';
+    document.body.appendChild(automaticDownload);
+    automaticDownload.click();
+    automaticDownload.remove();
+  }
+
+  async function exportGif(filePath) {
+    if (activeJobId) return;
+    activeJobId = 'submitting';
+    activeJobType = 'gif_export';
+    showProgressOverlay();
+    updateProgressOverlay({
+      job_type: 'gif_export', status: 'queued', stage: 'queued',
+      message: 'Submitting the GIF export job.', overall_progress: 0,
+      stage_progress: 0, elapsed_ms: 0
+    });
+    try {
+      const response = await fetch('/api/gif-exports', {
+        method: 'POST', headers: {'Content-Type': 'application/json'},
+        body: JSON.stringify({file_path: filePath})
+      });
+      const result = await response.json();
+      if (!response.ok) throw new Error(result.message || 'The GIF export could not be started.');
+      if (result.export) {
+        clearActiveJob();
+        hideProgressOverlay();
+        downloadGif(result.export);
+        return;
+      }
+      if (!result.job_id) throw new Error(result.message || 'The GIF export did not return a job.');
+      activeJobId = result.job_id;
+      activeJobType = result.job_type || 'gif_export';
+      localStorage.setItem(ACTIVE_JOB_KEY, activeJobId);
+      localStorage.setItem(ACTIVE_JOB_TYPE_KEY, activeJobType);
+      await pollActiveJob();
+    } catch (error) {
+      showJobFailure(error.message || 'Unable to contact Clipplex.', {job_type: 'gif_export'});
+    }
   }
 
   document.getElementById('refresh_position').addEventListener('click', refreshLivePosition);
@@ -1129,7 +1229,9 @@
   if (activeJobId) {
     showProgressOverlay();
     updateProgressOverlay({
-      status: 'queued', stage: 'queued', message: 'Reconnecting to the active clip job.',
+      job_type: activeJobType, status: 'queued', stage: 'queued',
+      message: activeJobType === 'gif_export' ?
+        'Reconnecting to the active GIF export.' : 'Reconnecting to the active clip job.',
       overall_progress: 0, stage_progress: 0, elapsed_ms: 0
     });
     pollActiveJob();

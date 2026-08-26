@@ -14,6 +14,7 @@ class DeploymentConfigurationTests(unittest.TestCase):
         self.assertNotIn("ARG STREAMABLE_PASSWORD", dockerfile)
         self.assertNotIn("ENV STREAMABLE_PASSWORD", dockerfile)
         self.assertIn("USER clipplex:clipplex", dockerfile)
+        self.assertIn("/app/app/static/media/gifs", dockerfile)
 
     def test_compose_maps_the_configured_runtime_identity(self):
         compose = (REPOSITORY_ROOT / "docker-compose.yml").read_text(encoding="utf-8")
@@ -45,6 +46,8 @@ class DeploymentConfigurationTests(unittest.TestCase):
         self.assertIn("docker compose up -d --build", readme)
         self.assertIn("Immich v1.135 or newer", readme)
         self.assertIn("Run exactly one Clipplex application process", readme)
+        self.assertIn("Export GIF", readme)
+        self.assertIn("below 9.5 MB", readme)
 
 
 if __name__ == "__main__":

@@ -3,7 +3,7 @@ from flask import render_template, redirect, request, jsonify, Response
 from app import app
 from app.forms import video as formVideo
 from app.jobs import ClipJobManager, JobFailure, JobQueueFull
-from app import uploaders
+from app import gif_exports, uploaders
 import clipplexAPI
 
 @app.route("/")
@@ -137,14 +137,41 @@ def upload_clip():
         return jsonify({"result": "error", "message": error.message}), error.status_code
 
 
+@app.route("/api/jobs/<job_id>", methods=["GET"])
 @app.route("/api/clip-jobs/<job_id>", methods=["GET"])
-def clip_job_status(job_id):
+def media_job_status(job_id):
     job = clip_job_manager.get(job_id)
     if job is None:
-        return jsonify({"message": "This clip job is no longer available."}), 404
+        return jsonify({"message": "This media job is no longer available."}), 404
     response = jsonify(job)
     response.headers["Cache-Control"] = "no-store"
     return response
+
+
+@app.route("/api/gif-exports", methods=["POST"])
+def create_gif_export():
+    try:
+        payload = request.get_json(silent=True)
+        if not isinstance(payload, dict):
+            raise gif_exports.GifExportError("The GIF export request must contain a JSON object.", 400)
+        file_path = payload.get("file_path")
+        cached = gif_exports.cached_export(file_path)
+        if cached is not None:
+            return jsonify({"result": "success", "export": cached}), 200
+        job_id = clip_job_manager.enqueue({
+            "job_type": "gif_export",
+            "file_path": file_path,
+        })
+        return jsonify({
+            "result": "queued",
+            "job_id": job_id,
+            "job_type": "gif_export",
+            "status_url": f"/api/jobs/{job_id}",
+        }), 202
+    except gif_exports.GifExportError as error:
+        return jsonify({"result": "error", "message": error.message}), error.status_code
+    except JobQueueFull as error:
+        return jsonify({"result": "queue_full", "message": str(error)}), 429
 
 @app.route("/instant_video.html", methods=["GET"])
 def timed_video():
@@ -163,7 +190,8 @@ def create_video():
             return jsonify({
                 "result": "queued",
                 "job_id": job_id,
-                "status_url": f"/api/clip-jobs/{job_id}",
+                "job_type": "clip",
+                "status_url": f"/api/jobs/{job_id}",
             }), 202
         else:
             args = request.args
@@ -355,7 +383,19 @@ def run_clip_job(payload, progress):
         }) from error
 
 
-clip_job_manager = ClipJobManager(run_clip_job)
+def run_media_job(payload, progress):
+    if payload.get("job_type") == "gif_export":
+        try:
+            return gif_exports.export_gif(payload.get("file_path"), progress)
+        except gif_exports.GifExportError as error:
+            raise JobFailure("failed", {
+                "result": "gif_export_failed",
+                "message": error.message,
+            }) from error
+    return run_clip_job(payload, progress)
+
+
+clip_job_manager = ClipJobManager(run_media_job)
 
 @app.route("/quick_add_time_to_start_time", methods=["POST"])
 def quick_add_time_to_start_time():
