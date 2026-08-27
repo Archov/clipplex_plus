@@ -485,6 +485,7 @@ def get_instant_video(
         "season_number": video.metadata_season,
         "episode_number": video.metadata_episode_number,
         "year": video.metadata_year,
+        "username": plex_data.username,
     }
     clip_identity = clip_library.allocate_clip_title(source_metadata)
     source_provenance = clip_trims.build_source_provenance(plex_data, audio_track, subtitle_track)

@@ -175,6 +175,9 @@ class CreateVideoRouteTests(unittest.TestCase):
         self.assertIn("Make Clip", page)
         self.assertIn("Clip Library", page)
         self.assertIn('id="latest_delete_modal"', page)
+        self.assertIn("buildLatestTitleEditor", page)
+        self.assertIn("saveLatestTitle", page)
+        self.assertIn("/api/clips/metadata", page)
         self.assertIn("slice(0, 1)", page)
 
     @patch("app.routes.clipplexAPI.Utils.get_videos_in_folder")
@@ -188,6 +191,9 @@ class CreateVideoRouteTests(unittest.TestCase):
 
         self.assertIn("Newest", page)
         self.assertNotIn("static/media/videos/old.mp4", page)
+        self.assertIn('class="btn btn-sm btn-outline-secondary edit-latest-title"', page)
+        self.assertIn('class="btn btn-outline-success save-latest-title"', page)
+        self.assertIn('class="btn btn-outline-secondary cancel-latest-title"', page)
 
     @patch("app.routes.clip_library.list_clips", return_value=[])
     def test_library_page_has_collapsible_filters_views_and_bottom_action(self, clips):
@@ -382,6 +388,7 @@ class CreateVideoRouteTests(unittest.TestCase):
         save_metadata.assert_called_once()
         saved_fields = save_metadata.call_args.args[1]
         self.assertEqual(saved_fields["clip_title"], "Movie")
+        self.assertEqual(saved_fields["username"], "alice")
         self.assertEqual(saved_fields["source"], {"version": 1})
         self.assertIs(saved_fields["original_start_time"], video.return_value.metadata_current_media_time)
         self.assertIs(saved_fields["original_end_time"], video.return_value.metadata_end_time)

@@ -18,6 +18,8 @@
   .job-progress-bar { transition: width .2s linear; min-width: 0; }
   .upload-option-list { min-height: 9rem; }
   .upload-tag-chip { display: inline-flex; align-items: center; gap: .35rem; }
+  .latest-clip-title-editor { min-width: 0; }
+  .latest-clip-title-edit { flex: 1 1 12rem; min-width: 0; }
 </style>
 
 <div id="job_progress_overlay" class="job-progress-overlay d-none" role="dialog" aria-modal="true" aria-labelledby="job_progress_title" aria-describedby="job_progress_message">
@@ -202,7 +204,15 @@
               <video controls preload="metadata"><source src="{{ video['file_path'] }}" type="video/mp4"></video>
             </div>
             <div class="col-lg-3">
-              <h3 class="h5">{{ video.get('clip_title') or video.get('display_heading') or video.get('show') or video.get('title') or 'Clip' }}</h3>
+              <div class="latest-clip-title-editor d-flex align-items-center gap-1 mb-2" data-clip='{{ video|tojson }}'>
+                <h3 class="h5 mb-0 latest-clip-title">{{ video.get('clip_title') or video.get('display_heading') or video.get('show') or video.get('title') or 'Clip' }}</h3>
+                <button type="button" class="btn btn-sm btn-outline-secondary edit-latest-title" title="Edit title" aria-label="Edit clip title">✏️</button>
+                <div class="input-group input-group-sm latest-clip-title-edit d-none">
+                  <input type="text" class="form-control latest-clip-title-input" maxlength="255" aria-label="Clip title">
+                  <button type="button" class="btn btn-outline-success save-latest-title" title="Save title" aria-label="Save clip title">✅</button>
+                  <button type="button" class="btn btn-outline-secondary cancel-latest-title" title="Cancel editing title" aria-label="Cancel title edit">❌</button>
+                </div>
+              </div>
               <p class="small text-muted">
                 {% if video.get('media_type') == 'episode' or video.get('show') %}{{ video.get('display_subtitle') or video.get('title') or 'Untitled episode' }}<br>{% endif %}
                 {{ video['original_start_time'] }}–{{ video.get('original_end_time') or video['original_start_time'] }}<br>Created by {{ video['username'] }}
@@ -777,6 +787,32 @@
     return clip.clip_title || clip.display_heading || clip.show || clip.title || 'Clip';
   }
 
+  function buildLatestTitleEditor(clip) {
+    const editor = document.createElement('div');
+    editor.className = 'latest-clip-title-editor d-flex align-items-center gap-1 mb-2';
+    editor.dataset.clip = JSON.stringify(clip);
+    const heading = document.createElement('h3');
+    heading.className = 'h5 mb-0 latest-clip-title';
+    heading.textContent = clipHeading(clip);
+    const edit = document.createElement('button');
+    edit.type = 'button'; edit.className = 'btn btn-sm btn-outline-secondary edit-latest-title';
+    edit.title = 'Edit title'; edit.setAttribute('aria-label', 'Edit clip title'); edit.textContent = '✏️';
+    const controls = document.createElement('div');
+    controls.className = 'input-group input-group-sm latest-clip-title-edit d-none';
+    const input = document.createElement('input');
+    input.type = 'text'; input.className = 'form-control latest-clip-title-input'; input.maxLength = 255;
+    input.setAttribute('aria-label', 'Clip title');
+    const save = document.createElement('button');
+    save.type = 'button'; save.className = 'btn btn-outline-success save-latest-title';
+    save.title = 'Save title'; save.setAttribute('aria-label', 'Save clip title'); save.textContent = '✅';
+    const cancel = document.createElement('button');
+    cancel.type = 'button'; cancel.className = 'btn btn-outline-secondary cancel-latest-title';
+    cancel.title = 'Cancel editing title'; cancel.setAttribute('aria-label', 'Cancel title edit'); cancel.textContent = '❌';
+    controls.append(input, save, cancel);
+    editor.append(heading, edit, controls);
+    return editor;
+  }
+
   function buildClipCard(clip) {
     const column = document.createElement('div');
     column.className = 'col-12 created-clip-card';
@@ -798,9 +834,7 @@
 
     const details = document.createElement('div');
     details.className = 'col-lg-3';
-    const heading = document.createElement('h3');
-    heading.className = 'h5';
-    heading.textContent = clipHeading(clip);
+    const titleEditor = buildLatestTitleEditor(clip);
     const metadata = document.createElement('p');
     metadata.className = 'small text-muted';
     const lines = [];
@@ -850,7 +884,7 @@
     upload.setAttribute('aria-label', 'Upload clip');
     upload.innerHTML = '<i class="fas fa-share-square" aria-hidden="true"></i>';
     actions.append(trim, extend, gifExport, download, remove, upload);
-    details.append(heading, metadata, actions);
+    details.append(titleEditor, metadata, actions);
     body.append(mediaColumn, details);
     card.appendChild(body);
     column.appendChild(card);
@@ -1105,6 +1139,18 @@
   }
 
   function bindClipActions(root) {
+    root.querySelectorAll('.edit-latest-title:not([data-bound])').forEach(button => {
+      button.dataset.bound = 'true';
+      button.addEventListener('click', () => beginLatestTitleEdit(button.closest('.latest-clip-title-editor')));
+    });
+    root.querySelectorAll('.save-latest-title:not([data-bound])').forEach(button => {
+      button.dataset.bound = 'true';
+      button.addEventListener('click', () => saveLatestTitle(button.closest('.latest-clip-title-editor')));
+    });
+    root.querySelectorAll('.cancel-latest-title:not([data-bound])').forEach(button => {
+      button.dataset.bound = 'true';
+      button.addEventListener('click', () => cancelLatestTitleEdit(button.closest('.latest-clip-title-editor')));
+    });
     root.querySelectorAll('.trim-clip:not([data-bound])').forEach(button => {
       button.dataset.bound = 'true';
       button.addEventListener('click', () => window.ClipTrimmer.open(JSON.parse(button.dataset.clip), 'clip'));
@@ -1125,6 +1171,63 @@
       button.dataset.bound = 'true';
       button.addEventListener('click', () => openUploadDialog(JSON.parse(button.dataset.file)));
     });
+  }
+
+  function beginLatestTitleEdit(editor) {
+    const clip = JSON.parse(editor.dataset.clip);
+    const input = editor.querySelector('.latest-clip-title-input');
+    input.value = clip.clip_title || '';
+    editor.querySelector('.latest-clip-title').classList.add('d-none');
+    editor.querySelector('.edit-latest-title').classList.add('d-none');
+    editor.querySelector('.latest-clip-title-edit').classList.remove('d-none');
+    input.focus();
+    input.select();
+  }
+
+  function cancelLatestTitleEdit(editor) {
+    editor.querySelector('.latest-clip-title-edit').classList.add('d-none');
+    editor.querySelector('.latest-clip-title').classList.remove('d-none');
+    const edit = editor.querySelector('.edit-latest-title');
+    edit.classList.remove('d-none');
+    edit.focus();
+  }
+
+  async function saveLatestTitle(editor) {
+    const clip = JSON.parse(editor.dataset.clip);
+    const input = editor.querySelector('.latest-clip-title-input');
+    const controls = editor.querySelector('.latest-clip-title-edit');
+    const title = input.value.trim();
+    const buttons = controls.querySelectorAll('button');
+    buttons.forEach(button => button.disabled = true);
+    input.disabled = true;
+    try {
+      const response = await fetch('/api/clips/metadata', {
+        method: 'PATCH',
+        headers: {'Content-Type': 'application/json'},
+        body: JSON.stringify({
+          file_path: clip.file_path,
+          clip_title: title,
+          media_library: clip.media_library,
+          media_type: clip.media_type,
+          title: clip.title,
+          year: clip.year,
+          show: clip.show,
+          season_number: clip.season_number,
+          episode_number: clip.episode_number,
+        })
+      });
+      const result = await response.json();
+      if (!response.ok) throw new Error(result.message || 'The clip title could not be saved.');
+      prependClipCard(result.clip);
+      info.innerHTML = '<div class="alert alert-success">Clip title saved.</div>';
+    } catch (error) {
+      input.setCustomValidity(error.message);
+      input.reportValidity();
+      input.addEventListener('input', () => input.setCustomValidity(''), {once: true});
+    } finally {
+      buttons.forEach(button => button.disabled = false);
+      input.disabled = false;
+    }
   }
 
   function prependClipCard(clip) {
