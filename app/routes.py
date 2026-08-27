@@ -5,7 +5,7 @@ from flask import render_template, redirect, request, jsonify, Response, send_fi
 from app import app
 from app.forms import video as formVideo
 from app.jobs import ClipJobManager, JobFailure, JobQueueFull
-from app import clip_library, clip_trims, gif_exports, uploaders
+from app import clip_library, clip_trims, gif_exports, settings, uploaders
 from app.media_files import MediaFileError, delete_generated_clip
 import clipplexAPI
 
@@ -174,6 +174,44 @@ def available_uploaders():
     return response
 
 
+@app.route("/api/settings", methods=["GET"])
+def get_settings():
+    response = jsonify(settings.ui_settings())
+    response.headers["Cache-Control"] = "no-store"
+    return response
+
+
+@app.route("/api/settings", methods=["PATCH"])
+def update_settings():
+    try:
+        payload = request.get_json(silent=True)
+        if not isinstance(payload, dict):
+            raise settings.SettingsError("The settings request must contain a JSON object.")
+        result = settings.update_ui_settings(payload.get("values", {}), payload.get("clear", []))
+        response = jsonify(result)
+        response.headers["Cache-Control"] = "no-store"
+        return response
+    except settings.SettingsError as error:
+        return jsonify({"message": error.message}), error.status_code
+    except sqlite3.Error:
+        app.logger.exception("Could not save settings")
+        return jsonify({"message": "Settings could not be saved."}), 500
+
+
+@app.route("/api/settings/tests", methods=["POST"])
+def test_settings_service():
+    try:
+        payload = request.get_json(silent=True)
+        if not isinstance(payload, dict):
+            raise settings.SettingsError("The test request must contain a JSON object.")
+        result = settings.test_service(payload.get("service"))
+        response = jsonify(result)
+        response.headers["Cache-Control"] = "no-store"
+        return response
+    except settings.SettingsError as error:
+        return jsonify({"service": payload.get("service") if isinstance(payload, dict) else None, "ok": False, "message": error.message}), error.status_code
+
+
 @app.route("/api/uploaders/immich/options", methods=["GET"])
 def immich_upload_options():
     try:
@@ -290,6 +328,11 @@ def clip_library_page():
         selected_sort=sort,
         active_page="clip_library",
     )
+
+
+@app.route("/settings.html", methods=["GET"])
+def settings_page():
+    return render_template("settings.html", title="Settings", active_page="settings")
 
 @app.route("/create_video", methods=["POST"])
 def create_video():
