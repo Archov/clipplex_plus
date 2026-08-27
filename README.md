@@ -38,6 +38,12 @@ Clipplex stores application settings, clip metadata, original-source provenance,
 
 The SQLite file contains credentials in plaintext and must be protected like the old `.env` file. It is kept below the private `.clipplex` path, blocked from HTTP access, and restricted to the application user where the platform supports file permissions. Back up the complete `CLIP_PATH` volume to preserve both clips and their metadata.
 
+### Managing settings in Clipplex
+
+Open **Settings** in the Clipplex sidebar to manage Plex, Streamable, Immich, and FFmpeg configuration after the initial bootstrap. Stored passwords, tokens, and API keys are never shown again; leave a secret field blank to keep it, or use its explicit clear control to remove it. Each service section can test its saved connection without uploading a clip.
+
+While a nonblank bootstrap environment variable is present, it remains authoritative and the matching Settings field is read-only. Remove that variable from `.env` (or the container environment), then recreate or redeploy the Clipplex container before managing that value in the UI. For Compose deployments, run `docker compose up -d`; `docker compose restart` does not reload changed environment values. The generated Flask session secret is intentionally internal and is not exposed in Settings.
+
 ### Immich API key permissions
 
 Clipplex targets Immich v1.135 or newer for creating a restricted API key through the Immich web interface. For all Clipplex Immich upload features, give the key only these permissions:
@@ -78,7 +84,7 @@ For a direct `docker run` deployment, build the image locally and pass `--user U
 
 Clipplex is served by Waitress as one application process with four request threads. Clip and GIF jobs and their progress are stored in memory and processed by a separate worker thread. Run exactly one Clipplex application process; do not add process workers until the job queue and job state use shared storage.
 
-The published port is intended for a trusted LAN or VPN. Waitress does not provide authentication or HTTPS. Before exposing Clipplex to the internet, put it behind an authenticated HTTPS reverse proxy and configure trusted proxy headers explicitly.
+The published port is intended for a trusted LAN or VPN. Waitress does not provide authentication or HTTPS. Before exposing Clipplex to the internet, put it behind an authenticated HTTPS reverse proxy and configure trusted proxy headers explicitly. This is especially important because the Settings page can change service credentials.
 
 ## Exporting GIFs
 
