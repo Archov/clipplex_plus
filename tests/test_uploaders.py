@@ -1,11 +1,13 @@
 import os
 from pathlib import Path
+import shutil
 import unittest
 from unittest.mock import call, patch
 
 import requests
 
 from app import uploaders
+from app.media_files import MEDIA_DIRECTORY
 
 
 class ResponseStub:
@@ -26,6 +28,17 @@ class ResponseStub:
 
 
 class UploaderConfigurationTests(unittest.TestCase):
+    def setUp(self):
+        self.temporary_directory = MEDIA_DIRECTORY / f"uploader-db-{os.urandom(8).hex()}"
+        self.temporary_directory.mkdir(parents=True)
+        self.addCleanup(shutil.rmtree, self.temporary_directory, True)
+        self.database_patch = patch(
+            "app.database.DEFAULT_DATABASE_PATH",
+            self.temporary_directory / "clipplex.sqlite3",
+        )
+        self.database_patch.start()
+        self.addCleanup(self.database_patch.stop)
+
     def test_only_complete_nonblank_uploaders_are_exposed_without_secrets(self):
         environment = {
             "STREAMABLE_LOGIN": " user@example.com ",
@@ -44,7 +57,8 @@ class UploaderConfigurationTests(unittest.TestCase):
         self.assertNotIn("top-secret", serialized)
 
         with patch.dict(os.environ, {"STREAMABLE_LOGIN": "user", "STREAMABLE_PASSWORD": "   "}, clear=True):
-            self.assertEqual(uploaders.configured_uploaders(), [])
+            retained = uploaders.configured_uploaders()
+        self.assertEqual([item["id"] for item in retained], ["streamable", "immich"])
 
     def test_clip_resolution_rejects_files_outside_generated_video_directory(self):
         with self.assertRaises(uploaders.UploadError) as raised:
@@ -79,6 +93,14 @@ class UploaderConfigurationTests(unittest.TestCase):
 
 
 class ImmichUploaderTests(unittest.TestCase):
+    def setUp(self):
+        self.database_root = MEDIA_DIRECTORY / f"immich-db-{os.urandom(8).hex()}"
+        self.database_root.mkdir(parents=True)
+        self.addCleanup(shutil.rmtree, self.database_root, True)
+        self.database_patch = patch("app.database.DEFAULT_DATABASE_PATH", self.database_root / "clipplex.sqlite3")
+        self.database_patch.start()
+        self.addCleanup(self.database_patch.stop)
+
     def environment(self, default_tag="#plex-clip"):
         return patch.dict(os.environ, {
             "IMMICH_URL": "http://immich:2283/api/",

@@ -1,2 +1,6 @@
 *.pyc
 *.env
+__pycache__/
+.pytest_cache/
+pytest-cache-files-*/
+app/static/media/

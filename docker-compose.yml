@@ -11,9 +11,9 @@ services:
     environment:
       PYTHONUNBUFFERED: "1"
       TZ: ${TZ:-America/Chicago}
-      FFMPEG_PRESET: ${FFMPEG_PRESET:-veryfast}
-      PLEX_URL: ${PLEX_URL}
-      PLEX_TOKEN: ${PLEX_TOKEN}
+      FFMPEG_PRESET: ${FFMPEG_PRESET:-}
+      PLEX_URL: ${PLEX_URL:-}
+      PLEX_TOKEN: ${PLEX_TOKEN:-}
       STREAMABLE_LOGIN: ${STREAMABLE_LOGIN:-}
       STREAMABLE_PASSWORD: ${STREAMABLE_PASSWORD:-}
       IMMICH_URL: ${IMMICH_URL:-}

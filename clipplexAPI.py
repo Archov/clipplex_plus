@@ -269,8 +269,9 @@ class PlexSessions:
     """Lightweight access to Plex playback sessions without probing media files."""
 
     def __init__(self):
-        self.plex_url = (os.environ.get("PLEX_URL") or "").rstrip("/")
-        self.plex_token = os.environ.get("PLEX_TOKEN") or ""
+        from app import settings
+        self.plex_url = settings.get("plex_url").rstrip("/")
+        self.plex_token = settings.get("plex_token")
         self.headers = {"X-Plex-Token": self.plex_token}
 
     def request_xml(self, path: str) -> ET.Element:
@@ -701,7 +702,8 @@ class Video:
 
     @property
     def x264_preset(self) -> str:
-        preset = (self.output_preset or os.environ.get("FFMPEG_PRESET") or "veryfast").lower()
+        from app import settings
+        preset = (self.output_preset or settings.get("ffmpeg_preset", "veryfast") or "veryfast").lower()
         if preset not in X264_PRESETS:
             LOGGER.warning("Ignoring invalid FFMPEG_PRESET=%r; using veryfast", preset)
             return "veryfast"

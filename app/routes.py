@@ -73,7 +73,10 @@ def session_preview():
 
 @app.route("/api/clips", methods=["GET"])
 def created_clips():
-    return jsonify({"clips": clipplexAPI.Utils.get_videos_in_folder()})
+    try:
+        return jsonify({"clips": clip_library.list_clips(sort=request.args.get("sort", "newest"))})
+    except MediaFileError as error:
+        return jsonify({"message": error.message}), error.status_code
 
 
 @app.route("/api/clips/metadata", methods=["PATCH"])
@@ -273,10 +276,14 @@ def timed_video():
 
 @app.route("/clip_library.html", methods=["GET"])
 def clip_library_page():
+    sort = request.args.get("sort", "newest")
+    if sort not in clip_library.SORT_ORDERS:
+        sort = "newest"
     return render_template(
         "clip_library.html",
         title="Clip Library",
-        clips=clip_library.list_clips(),
+        clips=clip_library.list_clips(sort=sort),
+        selected_sort=sort,
         active_page="clip_library",
     )
 

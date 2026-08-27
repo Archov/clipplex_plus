@@ -1,5 +1,6 @@
 import json
 import os
+import shutil
 from pathlib import Path
 from unittest.mock import patch
 import unittest
@@ -9,6 +10,7 @@ import ffmpeg
 
 from app import app, clip_library, clip_trims
 from app.media_files import (
+    MEDIA_DIRECTORY,
     PREVIEW_DIRECTORY,
     VIDEO_DIRECTORY,
     gif_path_for_clip,
@@ -21,6 +23,12 @@ from app.media_files import (
 
 class ClipTrimValidationTests(unittest.TestCase):
     def setUp(self):
+        self.database_root = MEDIA_DIRECTORY / f"trim-db-{uuid.uuid4().hex}"
+        self.database_root.mkdir(parents=True)
+        self.addCleanup(shutil.rmtree, self.database_root, True)
+        self.database_patch = patch("app.database.DEFAULT_DATABASE_PATH", self.database_root / "clipplex.sqlite3")
+        self.database_patch.start()
+        self.addCleanup(self.database_patch.stop)
         VIDEO_DIRECTORY.mkdir(parents=True, exist_ok=True)
         self.clip_path = VIDEO_DIRECTORY / f"trim-validation-{uuid.uuid4().hex}.mp4"
         self.clip_path.write_bytes(b"clip")
@@ -68,7 +76,7 @@ class ClipTrimValidationTests(unittest.TestCase):
         clip = clip_library.describe_clip(self.clip_path)
 
         self.assertEqual(clip["title"], "Legacy Movie")
-        self.assertTrue(metadata_path_for_clip(self.clip_path).is_file())
+        self.assertFalse(metadata_path_for_clip(self.clip_path).is_file())
         self.assertFalse(legacy.is_file())
         client = app.test_client()
         self.assertEqual(client.get(f"/static/media/.clipplex/metadata/{self.clip_path.stem}.json").status_code, 404)
@@ -87,8 +95,9 @@ class ClipTrimValidationTests(unittest.TestCase):
             "title": "Movie", "year": "", "show": "", "season_number": "", "episode_number": "",
         })
 
-        sidecar = json.loads(metadata_path_for_clip(self.clip_path).read_text(encoding="utf-8"))
-        self.assertEqual(sidecar["source"], source)
+        stored = clip_library._read_sidecar(self.clip_path)
+        self.assertEqual(stored["source"]["version"], source["version"])
+        self.assertEqual(stored["source"]["media_path"], source["media_path"])
 
     def test_ready_source_options_and_preview_results_do_not_expose_source_path(self):
         source = {
@@ -166,6 +175,12 @@ class ClipTrimValidationTests(unittest.TestCase):
 
 class SyntheticClipTrimTests(unittest.TestCase):
     def setUp(self):
+        self.database_root = MEDIA_DIRECTORY / f"trim-synthetic-db-{uuid.uuid4().hex}"
+        self.database_root.mkdir(parents=True)
+        self.addCleanup(shutil.rmtree, self.database_root, True)
+        self.database_patch = patch("app.database.DEFAULT_DATABASE_PATH", self.database_root / "clipplex.sqlite3")
+        self.database_patch.start()
+        self.addCleanup(self.database_patch.stop)
         VIDEO_DIRECTORY.mkdir(parents=True, exist_ok=True)
         self.clip_path = VIDEO_DIRECTORY / f"trim-synthetic-{uuid.uuid4().hex}.mp4"
         video = ffmpeg.input("color=c=blue:s=320x180:r=24:d=3", f="lavfi")

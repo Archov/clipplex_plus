@@ -16,6 +16,17 @@
       <option value="large">Large</option>
     </select>
   </div>
+  <div class="compact-size-control">
+    <label class="visually-hidden" for="sort_order">Sort clips</label>
+    <select id="sort_order" class="form-select" aria-label="Sort clips">
+      <option value="newest"{% if selected_sort == 'newest' %} selected{% endif %}>Newest first</option>
+      <option value="oldest"{% if selected_sort == 'oldest' %} selected{% endif %}>Oldest first</option>
+      <option value="title_asc"{% if selected_sort == 'title_asc' %} selected{% endif %}>Title A–Z</option>
+      <option value="title_desc"{% if selected_sort == 'title_desc' %} selected{% endif %}>Title Z–A</option>
+      <option value="duration_asc"{% if selected_sort == 'duration_asc' %} selected{% endif %}>Shortest first</option>
+      <option value="duration_desc"{% if selected_sort == 'duration_desc' %} selected{% endif %}>Longest first</option>
+    </select>
+  </div>
   <button id="filter_toggle" class="btn btn-outline-secondary ms-auto" type="button" data-bs-toggle="collapse" data-bs-target="#library_filters" aria-expanded="false" aria-controls="library_filters"><i class="fas fa-filter me-2" aria-hidden="true"></i>Filters<span id="filter_count" class="filter-count d-none">0</span></button>
 </div>
 
@@ -164,7 +175,7 @@
   <div class="modal-dialog modal-dialog-centered"><div class="modal-content"><div class="modal-body p-4"><div class="d-flex justify-content-between gap-3"><div><p class="eyebrow mb-1">Exporting</p><h2 class="h5 mb-1" id="library_job_title">Creating GIF</h2><p id="library_job_message" class="text-muted mb-0">Queued</p></div><strong id="library_job_percent">0%</strong></div><div class="progress mt-3"><div id="library_job_bar" class="progress-bar progress-bar-striped progress-bar-animated" style="width:0%" role="progressbar" aria-valuemin="0" aria-valuemax="100" aria-valuenow="0"></div></div></div></div></div>
 </div>
 
-<script id="clip_library_data" type="application/json">{{ clips|tojson }}</script>
+<script id="clip_library_data" type="application/json" data-sort="{{ selected_sort }}">{{ clips|tojson }}</script>
 {% include "_clip_trimmer.html" %}
 {% endblock %}
 

@@ -1,5 +1,4 @@
 from datetime import datetime, timezone
-import os
 from pathlib import Path
 from typing import Iterable
 
@@ -20,26 +19,27 @@ class UploadError(Exception):
         self.status_code = status_code
 
 
-def _environment(name: str) -> str:
-    return (os.environ.get(name) or "").strip()
+def _setting(name: str) -> str:
+    from app import settings
+    return settings.get(name).strip()
 
 
 def configured_uploaders() -> list[dict]:
     uploaders = []
-    if _environment("STREAMABLE_LOGIN") and _environment("STREAMABLE_PASSWORD"):
+    if _setting("streamable_login") and _setting("streamable_password"):
         uploaders.append({
             "id": "streamable",
             "label": "Streamable",
             "supports_tags": False,
             "supports_albums": False,
         })
-    if _environment("IMMICH_URL") and _environment("IMMICH_API_KEY"):
+    if _setting("immich_url") and _setting("immich_api_key"):
         uploaders.append({
             "id": "immich",
             "label": "Immich",
             "supports_tags": True,
             "supports_albums": True,
-            "default_tag": _environment("IMMICH_DEFAULT_TAG") or None,
+            "default_tag": _setting("immich_default_tag") or None,
         })
     return uploaders
 
@@ -85,8 +85,8 @@ def _response_message(response) -> str:
 
 class ImmichUploader:
     def __init__(self):
-        configured_url = _environment("IMMICH_URL").rstrip("/")
-        self.api_key = _environment("IMMICH_API_KEY")
+        configured_url = _setting("immich_url").rstrip("/")
+        self.api_key = _setting("immich_api_key")
         if not configured_url or not self.api_key:
             raise UploadError("Immich is not configured.", 400)
         if configured_url.lower().endswith("/api"):
@@ -95,7 +95,7 @@ class ImmichUploader:
         else:
             self.api_url = f"{configured_url}/api"
             self.web_url = configured_url
-        self.default_tag = _environment("IMMICH_DEFAULT_TAG")
+        self.default_tag = _setting("immich_default_tag")
 
     @property
     def headers(self) -> dict:
@@ -236,8 +236,8 @@ class ImmichUploader:
 
 
 def streamable_upload(clip_path: Path) -> tuple[dict, int]:
-    email = _environment("STREAMABLE_LOGIN")
-    password = _environment("STREAMABLE_PASSWORD")
+    email = _setting("streamable_login")
+    password = _setting("streamable_password")
     if not email or not password:
         raise UploadError("Streamable is not configured.", 400)
     try:

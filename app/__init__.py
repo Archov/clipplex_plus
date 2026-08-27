@@ -14,8 +14,12 @@ folders = [
 for folder in folders:
     os.makedirs(folder, exist_ok=True)
 
+from app import settings
+
+settings.initialize_settings()
+
 app = Flask(__name__, static_url_path="/static")
-app.config["SECRET_KEY"] = "fdsfsdfasdg34"
+app.config["SECRET_KEY"] = settings.get("flask_secret_key")
 
 
 @app.before_request

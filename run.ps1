@@ -55,28 +55,11 @@ else {
 # Existing environment/.env values win
 # ============================================================
 
-if (-not $env:FFMPEG_PRESET) {
-    $env:FFMPEG_PRESET = "veryfast"
-}
-
 if (-not $env:TZ) {
     $env:TZ = "America/Chicago"
 }
 
 $env:PYTHONUNBUFFERED = "1"
-
-
-# ============================================================
-# Required configuration
-# ============================================================
-
-if (-not $env:PLEX_URL) {
-    throw "PLEX_URL is not configured. Set it in .env or the environment."
-}
-
-if (-not $env:PLEX_TOKEN) {
-    throw "PLEX_TOKEN is not configured. Set it in .env or the environment."
-}
 
 
 # ============================================================
@@ -158,8 +141,7 @@ Write-Host "============================================================"
 Write-Host " Clipplex"
 Write-Host "============================================================"
 Write-Host " URL:    http://localhost:9945"
-Write-Host " Plex:   $($env:PLEX_URL)"
-Write-Host " Preset: $($env:FFMPEG_PRESET)"
+Write-Host " Config: SQLite (environment values bootstrap/override stored settings)"
 Write-Host "============================================================"
 Write-Host ""
 
