@@ -11862,7 +11862,9 @@ a:hover { color: #a7d2ff; }
 .library-group-header span { color: var(--clip-muted); font-size: .82rem; }
 .library-group-toggle { display: inline-flex; align-items: center; gap: .6rem; padding: 0; color: inherit; background: transparent; border: 0; font: inherit; font-weight: inherit; letter-spacing: inherit; text-align: left; }
 .library-group-toggle:hover, .library-group-toggle:focus-visible { color: var(--clip-accent); }
-.library-group-toggle > i { width: .75rem; color: var(--clip-muted); font-size: .72em; }
+.library-group-toggle > .library-group-chevron { width: .75rem; color: var(--clip-muted); font-size: .72em; }
+.library-group-toggle[aria-expanded="true"] > .library-group-chevron-closed,
+.library-group-toggle[aria-expanded="false"] > .library-group-chevron-open { display: none; }
 .clip-card-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(min(100%, var(--clip-grid-min)), 1fr)); gap: 1rem; }
 .clip-card-grid[hidden] { display: none; }
 .library-clip-card { min-width: 0; overflow: hidden; background: var(--clip-panel); border: 1px solid var(--clip-border); border-radius: .9rem; transition: border-color .18s ease, transform .18s ease, box-shadow .18s ease; }

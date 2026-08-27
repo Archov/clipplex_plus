@@ -215,9 +215,15 @@ class CreateVideoRouteTests(unittest.TestCase):
         script_response.close()
         self.assertIn("collapsedLibraries: new Set()", library_script)
         self.assertIn("toggle.setAttribute('aria-expanded'", library_script)
-        self.assertIn("collapsed ? 'chevron-right' : 'chevron-down'", library_script)
-        self.assertIn("shouldCollapse ? 'right' : 'down'", library_script)
+        self.assertIn("const collapsedIcon = icon('chevron-right')", library_script)
+        self.assertIn("const expandedIcon = icon('chevron-down')", library_script)
         self.assertIn("grid.hidden = shouldCollapse", library_script)
+
+        style_response = self.client.get("/static/css/styles.css")
+        library_styles = style_response.get_data(as_text=True)
+        style_response.close()
+        self.assertIn('.library-group-toggle[aria-expanded="true"] > .library-group-chevron-closed', library_styles)
+        self.assertIn('.library-group-toggle[aria-expanded="false"] > .library-group-chevron-open', library_styles)
 
     @patch("app.routes.clip_library.list_clips", return_value=[])
     def test_clips_api_forwards_valid_sort_order(self, clips):

@@ -184,8 +184,11 @@
       toggle.className = 'library-group-toggle';
       toggle.setAttribute('aria-expanded', String(!collapsed));
       toggle.setAttribute('aria-controls', gridId);
-      const toggleIcon = icon(collapsed ? 'chevron-right' : 'chevron-down');
-      toggle.append(toggleIcon, document.createTextNode(library));
+      const collapsedIcon = icon('chevron-right');
+      const expandedIcon = icon('chevron-down');
+      collapsedIcon.classList.add('library-group-chevron', 'library-group-chevron-closed');
+      expandedIcon.classList.add('library-group-chevron', 'library-group-chevron-open');
+      toggle.append(collapsedIcon, expandedIcon, document.createTextNode(library));
       title.appendChild(toggle);
       const count = document.createElement('span');
       const amount = grouped.get(library).length;
@@ -199,7 +202,6 @@
       toggle.addEventListener('click', () => {
         const shouldCollapse = toggle.getAttribute('aria-expanded') === 'true';
         toggle.setAttribute('aria-expanded', String(!shouldCollapse));
-        toggleIcon.className = `fas fa-chevron-${shouldCollapse ? 'right' : 'down'}`;
         grid.hidden = shouldCollapse;
         if (shouldCollapse) state.collapsedLibraries.add(library);
         else state.collapsedLibraries.delete(library);
