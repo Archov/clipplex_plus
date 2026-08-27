@@ -2,6 +2,7 @@ from types import SimpleNamespace
 import unittest
 from unittest.mock import patch
 import os
+import ffmpeg
 
 from app import app
 from app.jobs import JobFailure, JobQueueFull
@@ -162,6 +163,70 @@ class CreateVideoRouteTests(unittest.TestCase):
         self.assertIn("Export GIF", page)
         self.assertIn("/api/gif-exports", page)
         self.assertIn("/api/jobs/", page)
+        self.assertIn("Make Clip", page)
+        self.assertIn("Clip Library", page)
+        self.assertIn('id="latest_delete_modal"', page)
+        self.assertIn("slice(0, 1)", page)
+
+    @patch("app.routes.clipplexAPI.Utils.get_videos_in_folder")
+    def test_make_clip_page_renders_only_the_newest_clip(self, videos):
+        videos.return_value = [
+            {"file_path": "static/media/videos/new.mp4", "title": "Newest", "show": "", "original_start_time": "00:00:01.000", "username": "alice", "episode_number": "", "season_number": "", "display_heading": "Newest", "media_type": "movie"},
+            {"file_path": "static/media/videos/old.mp4", "title": "Old", "show": "", "original_start_time": "00:00:01.000", "username": "alice", "episode_number": "", "season_number": "", "display_heading": "Old", "media_type": "movie"},
+        ]
+
+        page = self.client.get("/instant_video.html").get_data(as_text=True)
+
+        self.assertIn("Newest", page)
+        self.assertNotIn("static/media/videos/old.mp4", page)
+
+    @patch("app.routes.clip_library.list_clips", return_value=[])
+    def test_library_page_has_collapsible_filters_views_and_bottom_action(self, clips):
+        page = self.client.get("/clip_library.html").get_data(as_text=True)
+
+        self.assertIn('data-bs-target="#library_filters"', page)
+        self.assertIn('id="grid_view"', page)
+        self.assertIn('id="list_view"', page)
+        self.assertIn('id="grid_size"', page)
+        self.assertIn("/static/js/clip_library.js", page)
+        self.assertIn("/static/js/clip_trimmer.js", page)
+        self.assertIn('id="clip_trim_modal"', page)
+        self.assertIn('id="clip_trim_start_range"', page)
+        self.assertIn('id="replace_trim_modal"', page)
+        self.assertNotIn('id="clip_source_select"', page)
+        self.assertNotIn("Choose a different source", page)
+        self.assertIn('id="edit_custom_title"', page)
+        self.assertLess(page.index('id="library_groups"'), page.index("Make a clip"))
+        self.assertIn('aria-current="page"', page)
+
+    @patch("app.routes.clip_library.save_clip_metadata")
+    def test_clip_metadata_patch_returns_updated_clip(self, save):
+        save.return_value = {"file_path": "static/media/videos/clip.mp4", "display_heading": "King Kong (1933)"}
+
+        response = self.client.patch("/api/clips/metadata", json={
+            "file_path": "static/media/videos/clip.mp4", "media_library": "Movies",
+            "media_type": "movie", "title": "King Kong", "year": "1933",
+        })
+
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.get_json()["clip"]["display_heading"], "King Kong (1933)")
+
+    @patch("app.routes.clip_library.save_clip_metadata")
+    def test_clip_metadata_patch_returns_json_for_storage_and_probe_failures(self, save):
+        for failure in (OSError("disk unavailable"), ffmpeg.Error("ffprobe", b"", b"failed")):
+            with self.subTest(failure=type(failure).__name__):
+                save.side_effect = failure
+                response = self.client.patch("/api/clips/metadata", json={"file_path": "static/media/videos/clip.mp4"})
+                self.assertEqual(response.status_code, 500)
+                self.assertEqual(response.content_type, "application/json")
+                self.assertIn("could not be saved", response.get_json()["message"])
+
+    @patch("app.routes.delete_generated_clip")
+    def test_json_delete_endpoint_deletes_selected_clip(self, delete):
+        response = self.client.delete("/api/clips", json={"file_path": "static/media/videos/clip.mp4"})
+
+        self.assertEqual(response.status_code, 200)
+        delete.assert_called_once_with("static/media/videos/clip.mp4")
 
     @patch("app.routes.clipplexAPI.Utils.get_videos_in_folder")
     def test_saved_clip_card_contains_gif_export_action(self, videos):
@@ -175,6 +240,30 @@ class CreateVideoRouteTests(unittest.TestCase):
 
         self.assertIn('class="btn btn-outline-success gif-export"', page)
         self.assertIn('aria-label="Export GIF"', page)
+        self.assertIn('class="btn btn-outline-secondary trim-clip"', page)
+        self.assertIn('class="btn btn-outline-secondary extend-clip"', page)
+
+    @patch("app.routes.clip_job_manager.enqueue", return_value="trim-job")
+    @patch("app.routes.clip_trims.validate_trim_payload")
+    def test_trim_endpoint_queues_validated_job(self, validate, enqueue):
+        validate.return_value = {"job_type": "clip_trim", "file_path": "static/media/videos/clip.mp4"}
+
+        response = self.client.post("/api/clip-trims", json={"file_path": "static/media/videos/clip.mp4"})
+
+        self.assertEqual(response.status_code, 202)
+        self.assertEqual(response.get_json()["job_type"], "clip_trim")
+        enqueue.assert_called_once_with(validate.return_value)
+
+    @patch("app.routes.clip_job_manager.enqueue", return_value="preview-job")
+    @patch("app.routes.clip_trims.validate_extension_preview_payload")
+    def test_extension_preview_endpoint_queues_validated_job(self, validate, enqueue):
+        validate.return_value = {"job_type": "extension_preview", "file_path": "static/media/videos/clip.mp4"}
+
+        response = self.client.post("/api/clip-extension-previews", json={"file_path": "static/media/videos/clip.mp4"})
+
+        self.assertEqual(response.status_code, 202)
+        self.assertEqual(response.get_json()["job_type"], "extension_preview")
+        enqueue.assert_called_once_with(validate.return_value)
 
     @patch("app.routes.get_instant_video")
     def test_track_failure_returns_retry_choices(self, create):
@@ -212,10 +301,58 @@ class CreateVideoRouteTests(unittest.TestCase):
         self.assertEqual(response.status_code, 422)
         self.assertEqual(response.get_json()["result"], "unsupported_video")
 
-    @patch("app.routes.clipplexAPI.Utils.get_video_in_folder", return_value={"file_path": "static/media/videos/clip.mp4"})
+    @patch("app.routes.clip_trims.build_source_provenance", return_value={"version": 1})
+    @patch("app.routes.clip_library.allocate_clip_title", return_value={
+        "source_key": "movie", "clip_number": 1,
+        "clip_title": "Movie", "clip_title_custom": False,
+    })
+    @patch("app.routes.clip_library.ensure_thumbnail")
+    @patch("app.routes.clip_library.save_clip_metadata", return_value={"file_path": "static/media/videos/clip.mp4"})
     @patch("app.routes.clipplexAPI.Video")
     @patch("app.routes.clipplexAPI.PlexInfo")
-    def test_clip_creation_passes_fractional_range_to_video(self, plex_info, video, descriptor):
+    def test_clip_creation_passes_fractional_range_to_video(self, plex_info, video, save_metadata, thumbnail, allocate_title, source_provenance):
+        plex_info.return_value = SimpleNamespace(
+            media_identity="1", session_identifier="session-1", duration_ms=60000,
+            username="alice", media_title="Movie", media_path="/media/movie.mkv",
+            resolve_tracks=lambda audio, subtitle: (
+                clipplexAPI.MediaTrack("audio", 1, "audio"), None
+            ),
+        )
+
+        thumbnail.side_effect = OSError("thumbnail disk unavailable")
+        result = __import__("app.routes", fromlist=["get_instant_video"]).get_instant_video(
+            session_id="session-1", start_ms=10123, end_ms=14567,
+            expected_media_identity="1", expected_session_id="session-1",
+        )
+
+        self.assertEqual(result["result"], "success")
+        self.assertEqual(result["clip"], {"file_path": "static/media/videos/clip.mp4"})
+        self.assertEqual(video.call_args.args[1], 10123)
+        self.assertAlmostEqual(video.call_args.args[2], 4.444)
+        progress_callback = video.return_value.extract_video.call_args.args[0]
+        self.assertTrue(callable(progress_callback))
+        self.assertEqual(video.return_value.metadata_clip_title, "Movie")
+        allocate_title.assert_called_once()
+        save_metadata.assert_called_once()
+        saved_fields = save_metadata.call_args.args[1]
+        self.assertEqual(saved_fields["clip_title"], "Movie")
+        self.assertEqual(saved_fields["source"], {"version": 1})
+        self.assertIs(saved_fields["original_start_time"], video.return_value.metadata_current_media_time)
+        self.assertIs(saved_fields["original_end_time"], video.return_value.metadata_end_time)
+        thumbnail.assert_called_once_with("static/media/videos/clip.mp4")
+
+    @patch("app.routes.clipplexAPI.Utils.get_video_in_folder", return_value={"file_path": "static/media/videos/fallback.mp4"})
+    @patch("app.routes.clip_trims.build_source_provenance", return_value={"version": 1})
+    @patch("app.routes.clip_library.allocate_clip_title", return_value={
+        "source_key": "movie", "clip_number": 1,
+        "clip_title": "Movie", "clip_title_custom": False,
+    })
+    @patch("app.routes.clip_library.save_clip_metadata", side_effect=ffmpeg.Error("ffprobe", b"", b"failed"))
+    @patch("app.routes.clipplexAPI.Video")
+    @patch("app.routes.clipplexAPI.PlexInfo")
+    def test_clip_creation_uses_fallback_when_metadata_probe_fails(
+        self, plex_info, video, save_metadata, allocate_title, source_provenance, get_fallback,
+    ):
         plex_info.return_value = SimpleNamespace(
             media_identity="1", session_identifier="session-1", duration_ms=60000,
             username="alice", media_title="Movie", media_path="/media/movie.mkv",
@@ -225,16 +362,13 @@ class CreateVideoRouteTests(unittest.TestCase):
         )
 
         result = __import__("app.routes", fromlist=["get_instant_video"]).get_instant_video(
-            session_id="session-1", start_ms=10123, end_ms=14567,
+            session_id="session-1", start_ms=10000, end_ms=12000,
             expected_media_identity="1", expected_session_id="session-1",
         )
 
         self.assertEqual(result["result"], "success")
-        self.assertEqual(video.call_args.args[1], 10123)
-        self.assertAlmostEqual(video.call_args.args[2], 4.444)
-        progress_callback = video.return_value.extract_video.call_args.args[0]
-        self.assertTrue(callable(progress_callback))
-        descriptor.assert_called_once_with(video.return_value.output_path)
+        self.assertEqual(result["clip"], {"file_path": "static/media/videos/fallback.mp4"})
+        get_fallback.assert_called_once_with(video.return_value.output_path)
 
     @patch("app.routes.get_instant_video")
     def test_queued_track_recovery_preserves_original_payload(self, create):

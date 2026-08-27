@@ -28,6 +28,17 @@ class DeploymentConfigurationTests(unittest.TestCase):
         self.assertNotIn('"flask", "run"', dockerfile)
         self.assertNotIn("ENV FLASK_APP", dockerfile)
 
+    def test_windows_startup_synchronizes_all_dependencies_once(self):
+        script = (REPOSITORY_ROOT / "run.ps1").read_text(encoding="utf-8")
+
+        self.assertEqual(script.count("-m pip install -r requirements.txt"), 1)
+        self.assertEqual(script.count('-c "import waitress"'), 1)
+        self.assertIn(
+            '}\n\nWrite-Host "Installing Clipplex dependencies..."\n'
+            '& $Python -m pip install -r requirements.txt',
+            script,
+        )
+
     def test_compose_maps_the_configured_runtime_identity(self):
         compose = (REPOSITORY_ROOT / "docker-compose.yml").read_text(encoding="utf-8")
         environment_sample = (REPOSITORY_ROOT / ".env.sample").read_text(encoding="utf-8")

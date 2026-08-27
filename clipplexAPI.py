@@ -381,6 +381,12 @@ class PlexInfo:
         self.media_path = self._get_file_path()
         self.media_fps = self._get_media_fps()
         self.media_type = self.metadata_element.attrib.get("type", self.session_element.attrib.get("type", ""))
+        self.media_library = (
+            self.metadata_element.attrib.get("librarySectionTitle")
+            or self.media_path_xml.attrib.get("librarySectionTitle")
+            or ""
+        )
+        self.media_year = self.metadata_element.attrib.get("year", "")
         self.media_title = self._get_file_title()
         self.current_media_time_int = int(self.session_element.attrib.get("viewOffset", 0))
         self.current_media_time_str = Utils(offset=self.current_media_time_int).offset_to_time
@@ -664,6 +670,9 @@ class Video:
         self.metadata_title = attributes.get("title", "")
         self.metadata_current_media_time = plex_data.current_media_time_str
         self.metadata_username = plex_data.username
+        self.metadata_media_type = "episode" if plex_data.media_type == "episode" else "movie"
+        self.metadata_library = getattr(plex_data, "media_library", "")
+        self.metadata_year = getattr(plex_data, "media_year", "") if self.metadata_media_type == "movie" else ""
         if plex_data.media_type == "episode":
             self.metadata_season = attributes.get("parentIndex", "")
             self.metadata_episode_number = attributes.get("index", "")
@@ -678,15 +687,21 @@ class Video:
         self.time = self.start_seconds
         self.duration = float(duration)
         self.metadata_current_media_time = Utils.milliseconds_to_string(self.start_ms)
+        self.metadata_end_time = Utils.milliseconds_to_string(self.start_ms + round(self.duration * 1000))
+        self.metadata_clip_title = self.metadata_title or getattr(plex_data, "media_title", "") or "Clip"
         self.file_name = file_name
         self.audio_track = audio_track
         self.subtitle_track = subtitle_track
         self.color_info = classify_video_color(plex_data)
+        self.output_max_width = 1920
+        self.output_max_height = 1080
+        self.output_crf = 18
+        self.output_preset = None
         self.output_path = f"{MEDIA_STATIC_PATH}/videos/{self.file_name}.mp4"
 
     @property
     def x264_preset(self) -> str:
-        preset = (os.environ.get("FFMPEG_PRESET") or "veryfast").lower()
+        preset = (self.output_preset or os.environ.get("FFMPEG_PRESET") or "veryfast").lower()
         if preset not in X264_PRESETS:
             LOGGER.warning("Ignoring invalid FFMPEG_PRESET=%r; using veryfast", preset)
             return "veryfast"
@@ -853,12 +868,12 @@ class Video:
         return video.filter("format", "yuv420p")
 
     @staticmethod
-    def _scale_for_compatibility(video):
+    def _scale_for_compatibility(video, max_width=1920, max_height=1080):
         """Fit inside 1920x1080 without upscaling, padding, or changing aspect ratio."""
         video = video.filter(
             "scale",
-            "min(1920,iw)",
-            "min(1080,ih)",
+            f"min({max_width},iw)",
+            f"min({max_height},ih)",
             force_original_aspect_ratio="decrease",
             force_divisible_by=2,
             flags="lanczos",
@@ -903,7 +918,7 @@ class Video:
         audio = media[str(self.audio_track.index)]
         if self.subtitle_track is not None:
             if not graphical_subtitle:
-                video = self._scale_for_compatibility(video)
+                video = self._scale_for_compatibility(video, self.output_max_width, self.output_max_height)
                 source_path = subtitle_path or self.media_path
                 if os.name == "nt":
                     source_path = os.path.relpath(source_path, os.getcwd()).replace("\\", "/")
@@ -927,10 +942,10 @@ class Video:
                 video = ffmpeg.overlay(video, media[str(self.subtitle_track.index)], eof_action="pass", repeatlast=0)
                 if preroll:
                     video = video.filter("trim", start=preroll, duration=self.duration)
-                video = self._scale_for_compatibility(video)
+                video = self._scale_for_compatibility(video, self.output_max_width, self.output_max_height)
                 video = video.filter("setpts", "PTS-STARTPTS")
         else:
-            video = self._scale_for_compatibility(video)
+            video = self._scale_for_compatibility(video, self.output_max_width, self.output_max_height)
             video = video.filter("setpts", "PTS-STARTPTS")
         if self.color_info.is_hdr:
             video = self._tag_bt709_output(video)
@@ -944,6 +959,11 @@ class Video:
             "metadata:g:3": f"episode_id={self.metadata_episode_number}",
             "metadata:g:4": f"comment={self.metadata_current_media_time}",
             "metadata:g:5": f"artist={self.metadata_username}",
+            "metadata:g:6": f"album={self.metadata_library}",
+            "metadata:g:7": f"date={self.metadata_year}",
+            "metadata:g:8": f"media_type={self.metadata_media_type}",
+            "metadata:g:9": f"clip_end_time={self.metadata_end_time}",
+            "metadata:g:10": f"clip_title={self.metadata_clip_title}",
             "profile:a": "aac_low",
         }
         if self.color_info.is_hdr:
@@ -956,7 +976,7 @@ class Video:
             })
         return ffmpeg.output(
             video, audio, self.output_path, map_metadata=-1, vcodec="libx264", acodec="aac",
-            audio_bitrate="192k", ac=2, ar=48000, pix_fmt="yuv420p", crf=18, preset=self.x264_preset,
+            audio_bitrate="192k", ac=2, ar=48000, pix_fmt="yuv420p", crf=self.output_crf, preset=self.x264_preset,
             movflags="+faststart", **metadata,
         ).overwrite_output()
 
@@ -1114,27 +1134,15 @@ class Utils:
 
     @staticmethod
     def get_video_in_folder(file_path) -> dict:
-        metadata = ffmpeg.probe(file_path)["format"].get("tags", {})
-        relative_path = os.path.relpath(file_path, "app").replace("\\", "/")
-        return {
-            "file_path": relative_path,
-            "title": metadata.get("title") or "",
-            "original_start_time": metadata.get("comment") or "",
-            "username": metadata.get("artist") or "",
-            "show": metadata.get("show") or "",
-            "episode_number": metadata.get("episode_id") or "",
-            "season_number": metadata.get("season_number") or "",
-        }
+        from app.clip_library import describe_clip
+
+        return describe_clip(file_path)
 
     @staticmethod
     def get_videos_in_folder() -> list:
-        folder = os.path.join(MEDIA_STATIC_PATH, "videos")
-        return [
-            Utils.get_video_in_folder(os.path.join(folder, file_name))
-            for file_name in os.listdir(folder)
-            if file_name.lower().endswith(".mp4")
-            and os.path.isfile(os.path.join(folder, file_name))
-        ]
+        from app.clip_library import list_clips
+
+        return list_clips()
 
     def delete_file(self, file_path) -> bool:
         from app.media_files import MediaFileError, delete_generated_clip

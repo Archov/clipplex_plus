@@ -1,9 +1,11 @@
 import time
-from flask import render_template, redirect, request, jsonify, Response
+import ffmpeg
+from flask import render_template, redirect, request, jsonify, Response, send_file
 from app import app
 from app.forms import video as formVideo
 from app.jobs import ClipJobManager, JobFailure, JobQueueFull
-from app import gif_exports, uploaders
+from app import clip_library, clip_trims, gif_exports, uploaders
+from app.media_files import MediaFileError, delete_generated_clip
 import clipplexAPI
 
 @app.route("/")
@@ -72,6 +74,90 @@ def session_preview():
 @app.route("/api/clips", methods=["GET"])
 def created_clips():
     return jsonify({"clips": clipplexAPI.Utils.get_videos_in_folder()})
+
+
+@app.route("/api/clips/metadata", methods=["PATCH"])
+def update_clip_metadata():
+    try:
+        payload = request.get_json(silent=True)
+        if not isinstance(payload, dict):
+            raise MediaFileError("Clip details must be a JSON object.")
+        clip = clip_library.save_clip_metadata(payload.get("file_path"), payload)
+        return jsonify({"result": "success", "clip": clip})
+    except MediaFileError as error:
+        return jsonify({"result": "error", "message": error.message}), error.status_code
+    except (OSError, ffmpeg.Error):
+        app.logger.exception("Could not save clip metadata")
+        return jsonify({"result": "error", "message": "The clip details could not be saved."}), 500
+
+
+@app.route("/api/clips", methods=["DELETE"])
+def delete_clip():
+    try:
+        payload = request.get_json(silent=True)
+        if not isinstance(payload, dict):
+            raise MediaFileError("The delete request must contain a JSON object.")
+        delete_generated_clip(payload.get("file_path"))
+        return jsonify({"result": "success"})
+    except MediaFileError as error:
+        return jsonify({"result": "error", "message": error.message}), error.status_code
+    except OSError:
+        app.logger.exception("Could not delete generated clip")
+        return jsonify({"result": "error", "message": "The clip could not be deleted."}), 500
+
+
+@app.route("/api/clips/thumbnail", methods=["GET"])
+def clip_thumbnail():
+    try:
+        thumbnail_path = clip_library.ensure_thumbnail(request.args.get("file_path"))
+        response = send_file(thumbnail_path, mimetype="image/jpeg", conditional=True)
+        response.headers["Cache-Control"] = "private, max-age=86400"
+        return response
+    except MediaFileError as error:
+        return jsonify({"result": "error", "message": error.message}), error.status_code
+
+
+@app.route("/api/clips/source-options", methods=["GET"])
+def clip_source_options():
+    try:
+        return jsonify(clip_trims.source_options(request.args.get("file_path")))
+    except MediaFileError as error:
+        return jsonify({"result": "error", "message": error.message}), error.status_code
+    except Exception:
+        app.logger.exception("Could not inspect original Plex source options")
+        return jsonify({"result": "error", "message": "Plex source options could not be loaded."}), 502
+
+
+@app.route("/api/clip-trims", methods=["POST"])
+def create_clip_trim():
+    try:
+        payload = clip_trims.validate_trim_payload(request.get_json(silent=True))
+        job_id = clip_job_manager.enqueue(payload)
+        return jsonify({
+            "result": "queued", "job_id": job_id, "job_type": "clip_trim",
+            "status_url": f"/api/jobs/{job_id}",
+        }), 202
+    except MediaFileError as error:
+        return jsonify({"result": "error", "message": error.message}), error.status_code
+    except JobQueueFull as error:
+        return jsonify({"result": "queue_full", "message": str(error)}), 429
+
+
+@app.route("/api/clip-extension-previews", methods=["POST"])
+def create_extension_preview():
+    try:
+        payload = clip_trims.validate_extension_preview_payload(request.get_json(silent=True))
+        job_id = clip_job_manager.enqueue(payload)
+        return jsonify({
+            "result": "queued", "job_id": job_id, "job_type": "extension_preview",
+            "status_url": f"/api/jobs/{job_id}",
+        }), 202
+    except MediaFileError as error:
+        return jsonify({"result": "error", "message": error.message}), error.status_code
+    except (TypeError, ValueError) as error:
+        return jsonify({"result": "error", "message": str(error)}), 400
+    except JobQueueFull as error:
+        return jsonify({"result": "queue_full", "message": str(error)}), 429
 
 
 @app.route("/api/uploaders", methods=["GET"])
@@ -176,7 +262,23 @@ def create_gif_export():
 @app.route("/instant_video.html", methods=["GET"])
 def timed_video():
     form = formVideo()
-    return render_template("instant_video.html", form=form, title="Instant Video", videos=clipplexAPI.Utils.get_videos_in_folder())
+    return render_template(
+        "instant_video.html",
+        form=form,
+        title="Make Clip",
+        videos=clipplexAPI.Utils.get_videos_in_folder()[:1],
+        active_page="make_clip",
+    )
+
+
+@app.route("/clip_library.html", methods=["GET"])
+def clip_library_page():
+    return render_template(
+        "clip_library.html",
+        title="Clip Library",
+        clips=clip_library.list_clips(),
+        active_page="clip_library",
+    )
 
 @app.route("/create_video", methods=["POST"])
 def create_video():
@@ -321,8 +423,35 @@ def get_instant_video(
         audio_track,
         subtitle_track,
     )
+    source_metadata = {
+        "media_library": video.metadata_library,
+        "media_type": video.metadata_media_type,
+        "title": video.metadata_title,
+        "show": video.metadata_showname,
+        "season_number": video.metadata_season,
+        "episode_number": video.metadata_episode_number,
+        "year": video.metadata_year,
+    }
+    clip_identity = clip_library.allocate_clip_title(source_metadata)
+    source_provenance = clip_trims.build_source_provenance(plex_data, audio_track, subtitle_track)
+    video.metadata_clip_title = clip_identity["clip_title"]
     video.extract_video(progress)
     progress("finalizing", 99, 90, "Reading the completed clip metadata.")
+    try:
+        clip = clip_library.save_clip_metadata(video.output_path, {
+            **source_metadata,
+            **clip_identity,
+            "original_start_time": video.metadata_current_media_time,
+            "original_end_time": video.metadata_end_time,
+            "source": source_provenance,
+        }, initialize=True)
+        try:
+            clip_library.ensure_thumbnail(clip["file_path"])
+        except (MediaFileError, OSError):
+            app.logger.warning("Could not create the new clip thumbnail", exc_info=True)
+    except (MediaFileError, OSError, ffmpeg.Error):
+        app.logger.warning("Could not save the new clip library metadata", exc_info=True)
+        clip = clipplexAPI.Utils.get_video_in_folder(video.output_path)
     request_elapsed = time.monotonic() - request_started_at
     log_request = app.logger.warning if request_elapsed > 5.0 else app.logger.info
     log_request(
@@ -331,7 +460,7 @@ def get_instant_video(
     )
     return {
         "result": "success",
-        "clip": clipplexAPI.Utils.get_video_in_folder(video.output_path),
+        "clip": clip,
     }
 
 
@@ -391,6 +520,22 @@ def run_media_job(payload, progress):
             raise JobFailure("failed", {
                 "result": "gif_export_failed",
                 "message": error.message,
+            }) from error
+    if payload.get("job_type") == "clip_trim":
+        try:
+            return clip_trims.run_trim_job(payload, progress)
+        except clip_trims.ClipTrimError as error:
+            raise JobFailure("failed", {
+                "result": "clip_trim_failed", "message": error.message,
+                "status_code": error.status_code,
+            }) from error
+    if payload.get("job_type") == "extension_preview":
+        try:
+            return clip_trims.run_extension_preview_job(payload, progress)
+        except clip_trims.ClipTrimError as error:
+            raise JobFailure("failed", {
+                "result": "extension_preview_failed", "message": error.message,
+                "status_code": error.status_code,
             }) from error
     return run_clip_job(payload, progress)
 

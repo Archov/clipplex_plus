@@ -9,20 +9,34 @@ from unittest.mock import patch
 import ffmpeg
 
 from app import gif_exports
-from app.media_files import GIF_DIRECTORY, VIDEO_DIRECTORY, delete_generated_clip
+from app.media_files import (
+    CLIP_METADATA_DIRECTORY,
+    GIF_DIRECTORY,
+    THUMBNAIL_DIRECTORY,
+    VIDEO_DIRECTORY,
+    delete_generated_clip,
+    metadata_path_for_clip,
+    thumbnail_path_for_clip,
+)
 
 
 class GifExportTests(unittest.TestCase):
     def setUp(self):
         VIDEO_DIRECTORY.mkdir(parents=True, exist_ok=True)
         GIF_DIRECTORY.mkdir(parents=True, exist_ok=True)
+        THUMBNAIL_DIRECTORY.mkdir(parents=True, exist_ok=True)
+        CLIP_METADATA_DIRECTORY.mkdir(parents=True, exist_ok=True)
         self.clip = VIDEO_DIRECTORY / "_gif_export_test.mp4"
         self.gif = GIF_DIRECTORY / "_gif_export_test.gif"
+        self.thumbnail = thumbnail_path_for_clip(self.clip)
+        self.metadata = metadata_path_for_clip(self.clip)
         self.clip.write_bytes(b"mp4")
 
     def tearDown(self):
         self.clip.unlink(missing_ok=True)
         self.gif.unlink(missing_ok=True)
+        self.thumbnail.unlink(missing_ok=True)
+        self.metadata.unlink(missing_ok=True)
         for temporary in GIF_DIRECTORY.glob("._gif_export_test.*.tmp.gif"):
             temporary.unlink(missing_ok=True)
 
@@ -141,11 +155,15 @@ class GifExportTests(unittest.TestCase):
 
     def test_deleting_clip_also_deletes_cached_gif(self):
         self.gif.write_bytes(b"gif")
+        self.thumbnail.write_bytes(b"jpg")
+        self.metadata.write_text("{}", encoding="utf-8")
 
         delete_generated_clip(self.public_clip_path)
 
         self.assertFalse(self.clip.exists())
         self.assertFalse(self.gif.exists())
+        self.assertFalse(self.thumbnail.exists())
+        self.assertFalse(self.metadata.exists())
 
     def test_cached_gif_cleanup_failure_does_not_prevent_clip_deletion(self):
         self.gif.write_bytes(b"gif")

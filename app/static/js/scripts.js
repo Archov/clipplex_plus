@@ -224,10 +224,24 @@ window.addEventListener('DOMContentLoaded', event => {
         if (localStorage.getItem('sb|sidebar-toggle') === 'true') {
             document.body.classList.toggle('sb-sidenav-toggled');
         }
+        const updateSidebarState = () => sidebarToggle.setAttribute(
+            'aria-expanded',
+            String(document.body.classList.contains('sb-sidenav-toggled'))
+        );
+        updateSidebarState();
         sidebarToggle.addEventListener('click', event => {
             event.preventDefault();
             document.body.classList.toggle('sb-sidenav-toggled');
             localStorage.setItem('sb|sidebar-toggle', document.body.classList.contains('sb-sidenav-toggled'));
+            updateSidebarState();
+        });
+        document.querySelectorAll('#layoutSidenav_nav .nav-link').forEach(link => {
+            link.addEventListener('click', () => {
+                if (window.matchMedia('(max-width: 991.98px)').matches) {
+                    document.body.classList.remove('sb-sidenav-toggled');
+                    updateSidebarState();
+                }
+            });
         });
     }
 

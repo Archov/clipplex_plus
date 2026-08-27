@@ -1,4 +1,4 @@
-from flask import Flask
+from flask import Flask, abort, request
 import os
 
 media_folder = os.path.join(os.path.dirname(__file__), "static", "media")
@@ -6,10 +6,23 @@ folders = [
     os.path.join(media_folder, "videos"),
     os.path.join(media_folder, "images"),
     os.path.join(media_folder, "gifs"),
+    os.path.join(media_folder, "thumbnails"),
+    os.path.join(media_folder, "previews"),
+    os.path.join(media_folder, ".clipplex", "metadata"),
+    os.path.join(media_folder, ".clipplex", "work"),
 ]
 for folder in folders:
     os.makedirs(folder, exist_ok=True)
 
 app = Flask(__name__, static_url_path="/static")
 app.config["SECRET_KEY"] = "fdsfsdfasdg34"
+
+
+@app.before_request
+def block_private_media_metadata():
+    path = request.path.lower()
+    if path.startswith("/static/media/.clipplex/") or path.endswith(".clipplex.json"):
+        abort(404)
+
+
 from app import routes
