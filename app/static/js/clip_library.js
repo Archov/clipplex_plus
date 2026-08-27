@@ -16,6 +16,7 @@
     searchTimer: null,
     uploaders: [],
     immichLoaded: false,
+    collapsedLibraries: new Set(),
     sort: validSorts.includes(storedSort) ? storedSort : (dataNode?.dataset.sort || 'newest'),
   };
 
@@ -170,20 +171,41 @@
       if (!grouped.has(library)) grouped.set(library, []);
       grouped.get(library).push(clip);
     });
-    Array.from(grouped.keys()).sort((a, b) => a.localeCompare(b)).forEach(library => {
+    Array.from(grouped.keys()).sort((a, b) => a.localeCompare(b)).forEach((library, index) => {
       const section = document.createElement('section');
       section.className = 'media-library-group';
       const groupHeader = document.createElement('div');
       groupHeader.className = 'library-group-header';
       const title = document.createElement('h2');
-      title.textContent = library;
+      const toggle = document.createElement('button');
+      const gridId = `library-group-${index}`;
+      const collapsed = state.collapsedLibraries.has(library);
+      toggle.type = 'button';
+      toggle.className = 'library-group-toggle';
+      toggle.setAttribute('aria-expanded', String(!collapsed));
+      toggle.setAttribute('aria-controls', gridId);
+      const collapsedIcon = icon('chevron-right');
+      const expandedIcon = icon('chevron-down');
+      collapsedIcon.classList.add('library-group-chevron', 'library-group-chevron-closed');
+      expandedIcon.classList.add('library-group-chevron', 'library-group-chevron-open');
+      toggle.append(collapsedIcon, expandedIcon, document.createTextNode(library));
+      title.appendChild(toggle);
       const count = document.createElement('span');
       const amount = grouped.get(library).length;
       count.textContent = `${amount} ${amount === 1 ? 'clip' : 'clips'}`;
       groupHeader.append(title, count);
       const grid = document.createElement('div');
       grid.className = 'clip-card-grid';
+      grid.id = gridId;
+      grid.hidden = collapsed;
       grouped.get(library).forEach(clip => grid.appendChild(buildClipCard(clip)));
+      toggle.addEventListener('click', () => {
+        const shouldCollapse = toggle.getAttribute('aria-expanded') === 'true';
+        toggle.setAttribute('aria-expanded', String(!shouldCollapse));
+        grid.hidden = shouldCollapse;
+        if (shouldCollapse) state.collapsedLibraries.add(library);
+        else state.collapsedLibraries.delete(library);
+      });
       section.append(groupHeader, grid);
       libraryRoot.appendChild(section);
     });
