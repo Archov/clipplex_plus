@@ -159,7 +159,7 @@
     if (isCheckbox) {
       control.setAttribute('role', 'switch');
       const check = document.createElement('div');
-      check.className = 'form-check form-switch';
+      check.className = 'form-check';
       label.className = 'form-check-label';
       check.append(control, label);
       wrapper.append(check);
@@ -206,7 +206,17 @@
     heading.className = 'h4 card-title';
     heading.textContent = section.label;
     body.append(heading);
-    fields.forEach(field => body.append(fieldNode(field)));
+    let activeGroup = null;
+    for (const field of fields) {
+      if (field.group && field.group !== activeGroup) {
+        const groupHeading = document.createElement('h3');
+        groupHeading.className = 'h6 mt-4 mb-3';
+        groupHeading.textContent = field.group;
+        body.append(groupHeading);
+        activeGroup = field.group;
+      }
+      body.append(fieldNode(field));
+    }
     if (['plex', 'streamable', 'immich'].includes(section.id)) {
       const testButton = document.createElement('button');
       testButton.className = 'btn btn-outline-secondary btn-sm';
