@@ -1,4 +1,3 @@
-import json
 import os
 from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
@@ -13,8 +12,6 @@ from app import clip_library
 from app.media_files import (
     MEDIA_DIRECTORY,
     MediaFileError,
-    legacy_metadata_path_for_clip,
-    metadata_path_for_clip,
     public_media_path,
     thumbnail_path_for_clip,
 )
@@ -26,21 +23,18 @@ class ClipLibraryTests(unittest.TestCase):
         test_root.mkdir(parents=True)
         self.addCleanup(shutil.rmtree, test_root, True)
         self.video_directory = test_root / "videos"
-        self.metadata_directory = test_root / "metadata"
         self.thumbnail_directory = test_root / "thumbnails"
         self.directory_patches = [
             patch("app.database.DEFAULT_DATABASE_PATH", test_root / "clipplex.sqlite3"),
             patch("app.clip_library.VIDEO_DIRECTORY", self.video_directory),
             patch("app.clip_library.THUMBNAIL_DIRECTORY", self.thumbnail_directory),
             patch("app.media_files.VIDEO_DIRECTORY", self.video_directory),
-            patch("app.media_files.CLIP_METADATA_DIRECTORY", self.metadata_directory),
             patch("app.media_files.THUMBNAIL_DIRECTORY", self.thumbnail_directory),
         ]
         for directory_patch in self.directory_patches:
             directory_patch.start()
             self.addCleanup(directory_patch.stop)
         self.video_directory.mkdir(parents=True, exist_ok=True)
-        self.metadata_directory.mkdir(parents=True, exist_ok=True)
         self.thumbnail_directory.mkdir(parents=True, exist_ok=True)
         self.clip_path = self.video_directory / f"library-test-{uuid.uuid4().hex}.mp4"
         self.clip_path.write_bytes(b"clip")
@@ -60,12 +54,11 @@ class ClipLibraryTests(unittest.TestCase):
         self.probe.stop()
         for path in (
             self.clip_path,
-            metadata_path_for_clip(self.clip_path),
             thumbnail_path_for_clip(self.clip_path),
         ):
             path.unlink(missing_ok=True)
 
-    def test_legacy_episode_is_inferred_and_uncategorized(self):
+    def test_external_episode_is_inferred_and_uncategorized(self):
         clip = clip_library.describe_clip(self.clip_path)
 
         self.assertEqual(clip["media_type"], "episode")
@@ -94,11 +87,10 @@ class ClipLibraryTests(unittest.TestCase):
         self.assertEqual(clip["clip_title"], "King Kong (1933)")
         self.assertEqual(clip["show"], "")
         self.assertEqual(self.clip_path.stat().st_mtime_ns, original_mtime)
-        stored = clip_library._read_sidecar(self.clip_path)
+        stored = clip_library.load_clip_metadata(self.clip_path)
         self.assertEqual(stored["media_library"], "Movies")
         self.assertEqual(stored["year"], "1933")
         self.assertEqual(stored["original_end_time"], "00:01:15.000")
-        self.assertFalse(metadata_path_for_clip(self.clip_path).exists())
 
     def test_clip_title_can_be_customized_and_reset_to_inferred_title(self):
         custom = clip_library.save_clip_metadata(public_media_path(self.clip_path), {
@@ -129,7 +121,7 @@ class ClipLibraryTests(unittest.TestCase):
         self.assertEqual(inferred["clip_title"], "Sample Show - S01E03 - A New Title")
         self.assertFalse(inferred["clip_title_custom"])
 
-    def test_legacy_clip_without_start_time_uses_zero_then_duration(self):
+    def test_external_clip_without_start_time_uses_zero_then_duration(self):
         with patch("app.clip_library.ffmpeg.probe", return_value={"format": {"duration": "2.25", "tags": {"title": "Movie"}}}):
             clip = clip_library.describe_clip(self.clip_path)
 
@@ -155,7 +147,6 @@ class ClipLibraryTests(unittest.TestCase):
             self.assertLess(paths.index(public_media_path(self.clip_path)), paths.index(public_media_path(older_path)))
         finally:
             older_path.unlink(missing_ok=True)
-            metadata_path_for_clip(older_path).unlink(missing_ok=True)
 
     def test_clips_from_the_same_source_receive_stable_numbered_titles(self):
         older_path = self.video_directory / f"library-test-{uuid.uuid4().hex}.mp4"
@@ -175,15 +166,13 @@ class ClipLibraryTests(unittest.TestCase):
             self.assertEqual(clips[public_media_path(self.clip_path)]["clip_number"], 2)
 
             older_path.unlink()
-            metadata_path_for_clip(older_path).unlink(missing_ok=True)
             remaining = clip_library.list_clips()
             current = next(clip for clip in remaining if clip["file_path"] == public_media_path(self.clip_path))
             self.assertEqual(current["clip_title"], "Sample Show - S01E03 - The Adventure - 2")
         finally:
             older_path.unlink(missing_ok=True)
-            metadata_path_for_clip(older_path).unlink(missing_ok=True)
 
-    def test_title_allocation_uses_sidecars_without_listing_or_probing(self):
+    def test_title_allocation_uses_database_without_listing_or_probing(self):
         clip_library.describe_clip(self.clip_path)
         with patch("app.clip_library.list_clips") as listing, patch("app.clip_library.ffmpeg.probe") as probe:
             allocated = clip_library.allocate_clip_title({
@@ -194,25 +183,6 @@ class ClipLibraryTests(unittest.TestCase):
         self.assertEqual(allocated["clip_number"], 1)
         listing.assert_not_called()
         probe.assert_not_called()
-
-    def test_title_allocation_reads_legacy_sidecars_without_migrating_them(self):
-        metadata = {
-            "media_library": "TV Shows", "media_type": "episode", "title": "The Adventure",
-            "show": "Sample Show", "season_number": "1", "episode_number": "3", "year": "",
-        }
-        legacy_path = legacy_metadata_path_for_clip(self.clip_path)
-        legacy_path.write_text(json.dumps({
-            **metadata,
-            "source_key": clip_library._source_key(metadata),
-            "clip_number": 3,
-        }), encoding="utf-8")
-
-        with patch("app.clip_library.os.replace") as replace:
-            allocated = clip_library.allocate_clip_title(metadata)
-
-        self.assertEqual(allocated["clip_number"], 4)
-        replace.assert_not_called()
-        self.assertFalse(legacy_path.is_file())
 
     def test_initialize_reuses_a_supplied_clip_identity(self):
         metadata = {
@@ -269,21 +239,7 @@ class ClipLibraryTests(unittest.TestCase):
             failed_probe.stop()
             self.probe.start()
 
-    def test_malformed_sidecar_is_retained_and_retried_after_repair(self):
-        sidecar = metadata_path_for_clip(self.clip_path)
-        sidecar.write_text("{not-json", encoding="utf-8")
-
-        first = clip_library.describe_clip(self.clip_path)
-        self.assertEqual(first["title"], "The Adventure")
-        self.assertTrue(sidecar.exists())
-
-        sidecar.write_text(json.dumps({"title": "Repaired", "media_library": "Recovered"}), encoding="utf-8")
-        repaired = clip_library.describe_clip(self.clip_path)
-        self.assertEqual(repaired["title"], "Repaired")
-        self.assertEqual(repaired["media_library"], "Recovered")
-        self.assertFalse(sidecar.exists())
-
-    def test_malformed_source_numbers_are_normalized_during_import(self):
+    def test_malformed_source_numbers_are_normalized_during_storage(self):
         source = {
             "media_path": "/media/source.mkv",
             "duration_ms": "not-a-number",
@@ -297,7 +253,7 @@ class ClipLibraryTests(unittest.TestCase):
             "show": "Sample Show", "season_number": "1", "episode_number": "3", "source": source,
         }, initialize=True)
 
-        stored = clip_library._read_sidecar(self.clip_path)["source"]
+        stored = clip_library.load_clip_metadata(self.clip_path)["source"]
         self.assertEqual(stored["duration_ms"], 0)
         self.assertEqual(stored["video_stream_index"], 0)
         self.assertEqual(stored["fingerprint"], {"size": 0, "mtime_ns": 0})
@@ -305,7 +261,7 @@ class ClipLibraryTests(unittest.TestCase):
 
     def test_mutations_return_not_found_if_the_database_row_disappears(self):
         operations = (
-            lambda: clip_library._update_sidecar(self.clip_path, {"title": "Changed"}),
+            lambda: clip_library.update_clip_fields(self.clip_path, {"title": "Changed"}),
             lambda: clip_library.save_clip_metadata(self.clip_path, {
                 "media_library": "Movies", "media_type": "movie", "title": "Changed",
                 "show": "", "season_number": "", "episode_number": "", "year": "",
@@ -333,16 +289,6 @@ class ClipLibraryTests(unittest.TestCase):
         with clip_library.database.open_connection() as connection:
             paths = {row["file_path"] for row in connection.execute("SELECT file_path FROM clips")}
         self.assertEqual(paths, {public_media_path(self.clip_path)})
-
-    def test_sidecar_is_not_deleted_when_database_import_fails(self):
-        sidecar = metadata_path_for_clip(self.clip_path)
-        sidecar.write_text(json.dumps({"title": "Keep me"}), encoding="utf-8")
-
-        with patch("app.clip_library._insert_new_clip", side_effect=OSError("database unavailable")):
-            with self.assertRaisesRegex(OSError, "database unavailable"):
-                clip_library.describe_clip(self.clip_path)
-
-        self.assertTrue(sidecar.exists())
 
     def test_database_sort_modes_order_clips(self):
         second = self.video_directory / f"library-test-{uuid.uuid4().hex}.mp4"

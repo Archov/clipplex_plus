@@ -7,7 +7,7 @@ import threading
 
 DEFAULT_DATABASE_PATH = Path(__file__).resolve().parent / "static" / "media" / ".clipplex" / "clipplex.sqlite3"
 DATABASE_PATH_ENV = "CLIPPLEX_DATABASE_PATH"
-SCHEMA_VERSION = 1
+SCHEMA_VERSION = 2
 _INITIALIZE_LOCK = threading.RLock()
 _INITIALIZED_PATHS = set()
 
@@ -70,6 +70,10 @@ def initialize_database() -> Path:
             if version < 1:
                 _migrate_to_v1(active)
                 active.execute("PRAGMA user_version = 1")
+                version = 1
+            if version < 2:
+                _migrate_to_v2(active)
+                active.execute("PRAGMA user_version = 2")
             active.commit()
         _INITIALIZED_PATHS.add(path)
     try:
@@ -114,8 +118,7 @@ def _migrate_to_v1(connection: sqlite3.Connection) -> None:
             clip_title TEXT NOT NULL DEFAULT '',
             clip_title_custom INTEGER NOT NULL DEFAULT 0 CHECK (clip_title_custom IN (0, 1)),
             created_at TEXT NOT NULL,
-            updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
-            legacy_import_pending INTEGER NOT NULL DEFAULT 0 CHECK (legacy_import_pending IN (0, 1))
+            updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
         );
 
         CREATE TABLE IF NOT EXISTS clip_sources (
@@ -157,3 +160,9 @@ def _migrate_to_v1(connection: sqlite3.Connection) -> None:
         CREATE UNIQUE INDEX IF NOT EXISTS clips_source_number_idx ON clips(source_key, clip_number);
         """
     )
+
+
+def _migrate_to_v2(connection: sqlite3.Connection) -> None:
+    columns = {row[1] for row in connection.execute("PRAGMA table_info(clips)")}
+    if "legacy_import_pending" in columns:
+        connection.execute("ALTER TABLE clips DROP COLUMN legacy_import_pending")

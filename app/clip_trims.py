@@ -128,8 +128,7 @@ def _require_saved_source(file_path) -> dict:
 
 
 def _clip_private_metadata(file_path) -> dict:
-    clip_path = clip_library._resolve_clip_path(file_path)
-    return clip_library._read_sidecar(clip_path)
+    return clip_library.load_clip_metadata(file_path)
 
 
 def _stored_track_options(source: dict) -> dict:
@@ -318,10 +317,10 @@ def run_trim_job(payload: dict, progress) -> dict:
             )
             if payload["mode"] == "replace":
                 os.replace(temporary_path, clip_path)
-                clip_library._update_sidecar(payload["file_path"], {
+                clip_library.update_clip_fields(payload["file_path"], {
                     "original_start_time": _timestamp(absolute_start_ms),
                     "original_end_time": _timestamp(absolute_end_ms),
-                }, clip.get("created_at"))
+                })
                 _refresh_companions(clip_path)
                 result_clip = clip_library.describe_clip(clip_path)
             else:

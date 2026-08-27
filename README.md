@@ -36,8 +36,6 @@ Copy `.env.sample` to `.env`, then configure the deployment paths and provide Pl
 
 Clipplex stores application settings, clip metadata, original-source provenance, and cached media analysis in `.clipplex/clipplex.sqlite3` inside `CLIP_PATH`. On startup, every nonblank application setting supplied through the environment is written to the database and overrides its stored value. Blank or missing variables leave the database value unchanged, so credentials may be removed from `.env` after one successful startup. Keep `MEDIA_PATH`, `CLIP_PATH`, `PUID`, `PGID`, and `TZ` in the deployment environment because Docker needs them before Clipplex can open its database.
 
-Existing `.clipplex/metadata/*.json` and adjacent `*.clipplex.json` files are imported automatically. A sidecar is deleted only after its database transaction commits. Malformed sidecars are retained and reported in the log so they can be repaired and retried.
-
 The SQLite file contains credentials in plaintext and must be protected like the old `.env` file. It is kept below the private `.clipplex` path, blocked from HTTP access, and restricted to the application user where the platform supports file permissions. Back up the complete `CLIP_PATH` volume to preserve both clips and their metadata.
 
 ### Immich API key permissions

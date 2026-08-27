@@ -29,8 +29,27 @@ class DatabaseTests(unittest.TestCase):
             self.assertEqual(connection.execute("PRAGMA foreign_keys").fetchone()[0], 1)
             tables = {row["name"] for row in connection.execute("SELECT name FROM sqlite_master WHERE type = 'table'")}
             indexes = {row["name"] for row in connection.execute("SELECT name FROM sqlite_master WHERE type = 'index'")}
+            clip_columns = {row["name"] for row in connection.execute("PRAGMA table_info(clips)")}
         self.assertTrue({"settings", "clips", "clip_sources", "clip_source_tracks"}.issubset(tables))
         self.assertTrue({"clips_created_at_idx", "clips_title_idx", "clips_duration_idx", "clips_source_number_idx"}.issubset(indexes))
+        self.assertNotIn("legacy_import_pending", clip_columns)
+
+    def test_schema_v1_obsolete_flag_is_removed_on_upgrade(self):
+        with database.open_connection() as connection:
+            database._migrate_to_v1(connection)
+            connection.execute(
+                "ALTER TABLE clips ADD COLUMN legacy_import_pending INTEGER NOT NULL DEFAULT 0"
+            )
+            connection.execute("PRAGMA user_version = 1")
+            connection.commit()
+
+        database.initialize_database()
+
+        with database.open_connection() as connection:
+            version = connection.execute("PRAGMA user_version").fetchone()[0]
+            clip_columns = {row["name"] for row in connection.execute("PRAGMA table_info(clips)")}
+        self.assertEqual(version, 2)
+        self.assertNotIn("legacy_import_pending", clip_columns)
 
     def test_environment_values_override_then_survive_removal(self):
         with patch.dict(os.environ, {"PLEX_URL": " http://plex:32400/ ", "PLEX_TOKEN": " first "}, clear=True):
