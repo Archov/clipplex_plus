@@ -71,6 +71,21 @@ class SettingsUiTests(unittest.TestCase):
             self.assertEqual(settings.get("immich_default_tag"), "")
             self.assertEqual(settings.get("ffmpeg_preset"), "veryfast")
 
+    def test_patch_rejects_service_urls_with_unsupported_components(self):
+        invalid_urls = (
+            "https://user:password@immich.example",
+            "https://immich.example?token=value",
+            "https://immich.example#fragment",
+        )
+        for invalid_url in invalid_urls:
+            with self.subTest(url=invalid_url):
+                response = self.client.patch("/api/settings", json={
+                    "values": {"immich_url": invalid_url}, "clear": [],
+                })
+                self.assertEqual(response.status_code, 400)
+        with patch.dict(os.environ, {}, clear=True):
+            self.assertEqual(settings.get("immich_url"), "")
+
     def test_environment_managed_settings_cannot_be_updated(self):
         response = self.client.patch("/api/settings", json={
             "values": {"plex_url": "http://other-plex:32400"}, "clear": [],

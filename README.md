@@ -44,7 +44,7 @@ The SQLite file contains credentials in plaintext and must be protected like the
 
 Open **Settings** in the Clipplex sidebar to manage Plex, Streamable, Immich, and FFmpeg configuration after the initial bootstrap. Stored passwords, tokens, and API keys are never shown again; leave a secret field blank to keep it, or use its explicit clear control to remove it. Each service section can test its saved connection without uploading a clip.
 
-While a nonblank bootstrap environment variable is present, it remains authoritative and the matching Settings field is read-only. Remove that variable from `.env` (or the container environment) and restart the container before managing that value in the UI. The generated Flask session secret is intentionally internal and is not exposed in Settings.
+While a nonblank bootstrap environment variable is present, it remains authoritative and the matching Settings field is read-only. Remove that variable from `.env` (or the container environment), then recreate or redeploy the Clipplex container before managing that value in the UI. For Compose deployments, run `docker compose up -d`; `docker compose restart` does not reload changed environment values. The generated Flask session secret is intentionally internal and is not exposed in Settings.
 
 ### Immich API key permissions
 
