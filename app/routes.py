@@ -89,8 +89,22 @@ def update_clip_metadata():
         payload = request.get_json(silent=True)
         if not isinstance(payload, dict):
             raise MediaFileError("Clip details must be a JSON object.")
+        try:
+            previous = clip_library.describe_clip(payload.get("file_path"))
+        except MediaFileError:
+            previous = None
         clip = clip_library.save_clip_metadata(payload.get("file_path"), payload)
-        return jsonify({"result": "success", "clip": clip})
+        warning = ""
+        if previous and clip.get("immich_asset_id") and clip.get("clip_title") != previous.get("clip_title"):
+            try:
+                uploaders.ImmichUploader()._update_description(clip["immich_asset_id"], clip["clip_title"])
+            except uploaders.UploadError as error:
+                warning = "Clip title saved, but the Immich description could not be updated: " + error.message
+                app.logger.warning(
+                    "Clip title saved but Immich description sync failed for asset %s: %s",
+                    clip["immich_asset_id"], error.message,
+                )
+        return jsonify({"result": "success", "clip": clip, "warning": warning or None})
     except MediaFileError as error:
         return jsonify({"result": "error", "message": error.message}), error.status_code
     except (OSError, ffmpeg.Error, sqlite3.Error):
@@ -104,9 +118,19 @@ def delete_clip():
         payload = request.get_json(silent=True)
         if not isinstance(payload, dict):
             raise MediaFileError("The delete request must contain a JSON object.")
+        delete_immich_asset = _optional_boolean(payload, "delete_immich_asset")
+        if delete_immich_asset:
+            clip = clip_library.describe_clip(payload.get("file_path"))
+            if settings.get("immich_manage_assets") != "true":
+                raise MediaFileError("Enable Manage Immich clips after upload before deleting remote assets.", 400)
+            if not clip.get("immich_asset_id"):
+                raise MediaFileError("This clip has no associated Immich asset.", 400)
+            uploaders.ImmichUploader().delete_asset(clip["immich_asset_id"])
         delete_generated_clip(payload.get("file_path"))
         return jsonify({"result": "success"})
-    except MediaFileError as error:
+    except (MediaFileError, ValueError) as error:
+        return jsonify({"result": "error", "message": getattr(error, "message", str(error))}), getattr(error, "status_code", 400)
+    except uploaders.UploadError as error:
         return jsonify({"result": "error", "message": error.message}), error.status_code
     except OSError:
         app.logger.exception("Could not delete generated clip")
@@ -240,6 +264,15 @@ def _upload_string_list(payload, key):
     return result
 
 
+def _optional_boolean(payload, key):
+    if key not in payload:
+        return False
+    value = payload[key]
+    if not isinstance(value, bool):
+        raise ValueError(f"{key} must be true or false.")
+    return value
+
+
 @app.route("/api/uploads", methods=["POST"])
 def upload_clip():
     try:
@@ -260,10 +293,44 @@ def upload_clip():
             tag_names=_upload_string_list(payload, "tag_names"),
             album_ids=_upload_string_list(payload, "album_ids"),
             new_album_name=new_album_name.strip(),
+            apply_auto_tags=_optional_boolean(payload, "apply_auto_tags"),
         )
+        if result.get("asset_id") and uploader_id.strip() == "immich":
+            try:
+                clip_library.update_clip_fields(file_path, {"immich_asset_id": result["asset_id"]})
+            except MediaFileError:
+                pass
         return jsonify(result), status_code
     except ValueError as error:
         return jsonify({"result": "error", "message": str(error)}), 400
+    except uploaders.UploadError as error:
+        return jsonify({"result": "error", "message": error.message}), error.status_code
+
+
+def _auto_upload_immich(clip, progress=None):
+    if settings.get("immich_auto_upload") != "true" or "immich" not in uploaders.configured_uploader_ids():
+        return None
+    if progress:
+        progress("uploading", 99, 0, "Uploading to Immich.")
+    result, _ = uploaders.upload_clip(clip["file_path"], "immich", apply_auto_tags=True)
+    if result.get("asset_id"):
+        clip_library.update_clip_fields(clip["file_path"], {"immich_asset_id": result["asset_id"]})
+        clip = clip_library.describe_clip(clip["file_path"])
+    if progress:
+        progress("uploading", 99, 100, "Immich upload finished.")
+    return {"clip": clip, "upload": result}
+
+
+@app.route("/api/immich/uploads/missing", methods=["POST"])
+def upload_missing_immich_clips():
+    try:
+        if "immich" not in uploaders.configured_uploader_ids():
+            raise uploaders.UploadError("Immich is not configured.", 400)
+        paths = [clip["file_path"] for clip in clip_library.list_clips() if not clip.get("immich_asset_id")]
+        job_id = clip_job_manager.enqueue({"job_type": "immich_bulk_upload", "file_paths": paths})
+        return jsonify({"result": "queued", "job_id": job_id, "job_type": "immich_bulk_upload", "status_url": f"/api/jobs/{job_id}"}), 202
+    except JobQueueFull as error:
+        return jsonify({"result": "queue_full", "message": str(error)}), 429
     except uploaders.UploadError as error:
         return jsonify({"result": "error", "message": error.message}), error.status_code
 
@@ -507,6 +574,13 @@ def get_instant_video(
     except (MediaFileError, OSError, ffmpeg.Error):
         app.logger.warning("Could not save the new clip library metadata", exc_info=True)
         clip = clipplexAPI.Utils.get_video_in_folder(video.output_path)
+    auto_upload = None
+    try:
+        auto_upload = _auto_upload_immich(clip, progress)
+        if auto_upload:
+            clip = auto_upload["clip"]
+    except uploaders.UploadError as error:
+        auto_upload = {"warning": error.message}
     request_elapsed = time.monotonic() - request_started_at
     log_request = app.logger.warning if request_elapsed > 5.0 else app.logger.info
     log_request(
@@ -516,6 +590,7 @@ def get_instant_video(
     return {
         "result": "success",
         "clip": clip,
+        "immich_auto_upload": auto_upload,
     }
 
 
@@ -568,6 +643,27 @@ def run_clip_job(payload, progress):
 
 
 def run_media_job(payload, progress):
+    if payload.get("job_type") == "immich_bulk_upload":
+        failures, warnings, completed = [], [], 0
+        paths = payload.get("file_paths") or []
+        for index, file_path in enumerate(paths):
+            progress("uploading", 5 + (90 * index / max(1, len(paths))), 100 * index / max(1, len(paths)), "Uploading clips to Immich.")
+            try:
+                result, _ = uploaders.upload_clip(file_path, "immich", apply_auto_tags=True)
+                if result.get("asset_id"):
+                    clip_library.update_clip_fields(file_path, {"immich_asset_id": result["asset_id"]})
+                completed += 1
+                if result.get("result") == "partial_success":
+                    warnings.append({"file_path": file_path, "message": "; ".join(item["message"] for item in result.get("failures", []))})
+            except (uploaders.UploadError, MediaFileError, OSError, sqlite3.Error) as error:
+                failures.append({"file_path": file_path, "message": getattr(error, "message", str(error))})
+        return {
+            "result": "partial_success" if failures or warnings else "success",
+            "completed": completed,
+            "failed": len(failures),
+            "failures": failures,
+            "warnings": warnings,
+        }
     if payload.get("job_type") == "gif_export":
         try:
             return gif_exports.export_gif(payload.get("file_path"), progress)
@@ -578,7 +674,15 @@ def run_media_job(payload, progress):
             }) from error
     if payload.get("job_type") == "clip_trim":
         try:
-            return clip_trims.run_trim_job(payload, progress)
+            result = clip_trims.run_trim_job(payload, progress)
+            try:
+                auto_upload = None if result.pop("immich_auto_upload_handled", False) else _auto_upload_immich(result["clip"], progress)
+            except uploaders.UploadError as error:
+                auto_upload = {"warning": error.message}
+            if auto_upload:
+                result["clip"] = auto_upload["clip"]
+                result["immich_auto_upload"] = auto_upload
+            return result
         except clip_trims.ClipTrimError as error:
             raise JobFailure("failed", {
                 "result": "clip_trim_failed", "message": error.message,

@@ -7,7 +7,7 @@ import threading
 
 DEFAULT_DATABASE_PATH = Path(__file__).resolve().parent / "static" / "media" / ".clipplex" / "clipplex.sqlite3"
 DATABASE_PATH_ENV = "CLIPPLEX_DATABASE_PATH"
-SCHEMA_VERSION = 2
+SCHEMA_VERSION = 3
 _INITIALIZE_LOCK = threading.RLock()
 _INITIALIZED_PATHS = set()
 
@@ -74,6 +74,10 @@ def initialize_database() -> Path:
             if version < 2:
                 _migrate_to_v2(active)
                 active.execute("PRAGMA user_version = 2")
+                version = 2
+            if version < 3:
+                _migrate_to_v3(active)
+                active.execute("PRAGMA user_version = 3")
             active.commit()
         _INITIALIZED_PATHS.add(path)
     try:
@@ -166,3 +170,9 @@ def _migrate_to_v2(connection: sqlite3.Connection) -> None:
     columns = {row[1] for row in connection.execute("PRAGMA table_info(clips)")}
     if "legacy_import_pending" in columns:
         connection.execute("ALTER TABLE clips DROP COLUMN legacy_import_pending")
+
+
+def _migrate_to_v3(connection: sqlite3.Connection) -> None:
+    columns = {row[1] for row in connection.execute("PRAGMA table_info(clips)")}
+    if "immich_asset_id" not in columns:
+        connection.execute("ALTER TABLE clips ADD COLUMN immich_asset_id TEXT NOT NULL DEFAULT ''")

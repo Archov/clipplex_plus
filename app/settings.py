@@ -38,12 +38,23 @@ SETTING_DEFINITIONS = {
     "immich_api_key": {
         "environment": "IMMICH_API_KEY", "secret": True, "section": "immich",
         "label": "Immich API key", "help": "API key used for Immich uploads.", "kind": "password",
-        "permissions": ["asset.upload", "tag.read", "tag.create", "tag.asset", "album.read", "album.create", "albumAsset.create"],
+        "permissions": ["asset.upload", "asset.update", "tag.read", "tag.create", "tag.asset", "album.read", "album.create", "albumAsset.create"],
     },
     "immich_default_tag": {
         "environment": "IMMICH_DEFAULT_TAG", "secret": False, "section": "immich",
         "label": "Default Immich tag", "help": "Optional tag added to every Immich upload.", "kind": "text",
     },
+    "immich_auto_upload": {
+        "environment": None, "secret": False, "section": "immich",
+        "label": "Auto upload new clips", "help": "Upload newly created and replacement clips to Immich.", "kind": "checkbox",
+    },
+    "immich_manage_assets": {
+        "environment": None, "secret": False, "section": "immich",
+        "label": "Manage Immich clips after upload", "help": "Allow Clipplex to delete linked Immich assets during replacement or deletion.", "kind": "checkbox",
+    },
+    "immich_auto_tag_library": {"environment": None, "secret": False, "section": "immich", "label": "Tag library", "help": "Use the Plex library as an automatic tag.", "kind": "checkbox"},
+    "immich_auto_tag_title": {"environment": None, "secret": False, "section": "immich", "label": "Tag show or movie", "help": "Use the show or movie name as an automatic tag.", "kind": "checkbox"},
+    "immich_auto_tag_episode": {"environment": None, "secret": False, "section": "immich", "label": "Tag episode", "help": "Use S##E## as an automatic tag for episodes.", "kind": "checkbox"},
     "ffmpeg_preset": {
         "environment": "FFMPEG_PRESET", "secret": False, "section": "encoding",
         "label": "FFmpeg preset", "help": "Encoding speed/quality preset used for new clips.", "kind": "select",
@@ -62,13 +73,16 @@ def initialize_settings() -> None:
     database.initialize_database()
     with database.transaction(immediate=True) as connection:
         for key, definition in SETTING_DEFINITIONS.items():
-            value = (os.environ.get(definition["environment"]) or "").strip()
+            value = (os.environ.get(definition["environment"]) or "").strip() if definition.get("environment") else ""
             if value:
                 _upsert(connection, key, value, definition["secret"])
         if connection.execute("SELECT 1 FROM settings WHERE key = 'ffmpeg_preset'").fetchone() is None:
             _upsert(connection, "ffmpeg_preset", "veryfast", False)
         if connection.execute("SELECT 1 FROM settings WHERE key = 'flask_secret_key'").fetchone() is None:
             _upsert(connection, "flask_secret_key", secrets.token_urlsafe(48), True)
+        for key in ("immich_auto_upload", "immich_manage_assets", "immich_auto_tag_library", "immich_auto_tag_title", "immich_auto_tag_episode"):
+            if connection.execute("SELECT 1 FROM settings WHERE key = ?", (key,)).fetchone() is None:
+                _upsert(connection, key, "false", False)
 
 
 def _upsert(connection, key: str, value: str, is_secret: bool) -> None:
@@ -90,7 +104,7 @@ def get(key: str, default: str = "") -> str:
         raise KeyError(f"Unknown Clipplex setting: {key}")
     database.initialize_database()
     definition = SETTING_DEFINITIONS[key]
-    environment_value = (os.environ.get(definition["environment"]) or "").strip()
+    environment_value = (os.environ.get(definition["environment"]) or "").strip() if definition.get("environment") else ""
     if environment_value:
         with database.transaction(immediate=True) as connection:
             row = connection.execute("SELECT value FROM settings WHERE key = ?", (key,)).fetchone()
@@ -103,7 +117,8 @@ def get(key: str, default: str = "") -> str:
 
 
 def _environment_value(key: str) -> str:
-    return (os.environ.get(SETTING_DEFINITIONS[key]["environment"]) or "").strip()
+    environment = SETTING_DEFINITIONS[key].get("environment")
+    return (os.environ.get(environment) or "").strip() if environment else ""
 
 
 def _validate_url(key: str, value: str) -> None:
@@ -131,6 +146,8 @@ def _validate_value(key: str, value: str) -> str:
         from clipplexAPI import X264_PRESETS
         if cleaned not in X264_PRESETS:
             raise SettingsError("Select a supported FFmpeg preset.")
+    if SETTING_DEFINITIONS[key].get("kind") == "checkbox" and cleaned not in {"true", "false"}:
+        raise SettingsError(f"{SETTING_DEFINITIONS[key]['label']} must be enabled or disabled.")
     return cleaned
 
 

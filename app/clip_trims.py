@@ -284,7 +284,49 @@ def _refresh_companions(clip_path: Path):
         pass
 
 
+def _auto_upload_replacement(temporary_path: Path, clip: dict) -> tuple[str, str]:
+    """Upload a replacement before changing the local clip, when enabled.
+
+    Returning the new asset ID lets the caller atomically associate it with the
+    replacement.  An upload failure intentionally leaves the existing local
+    clip untouched.
+    """
+    from app import settings, uploaders
+
+    if settings.get("immich_auto_upload") != "true" or "immich" not in uploaders.configured_uploader_ids():
+        return "", ""
+    uploader = uploaders.ImmichUploader()
+    try:
+        result, _ = uploader.upload(
+            temporary_path,
+            [],
+            [],
+            [],
+            "",
+            clip.get("clip_title", ""),
+            clip,
+        )
+    except uploaders.UploadError as error:
+        raise ClipTrimError(
+            "The replacement was not uploaded to Immich, so the existing clip was kept: " + error.message,
+            error.status_code,
+        ) from error
+    warning = "; ".join(
+        f"Immich {'description update' if item.get('step') == 'description' else item.get('step') or 'metadata update'} failed: {item['message']}"
+        for item in result.get("failures", [])
+    )
+    new_asset_id = result.get("asset_id", "")
+    if settings.get("immich_manage_assets") == "true" and clip.get("immich_asset_id"):
+        try:
+            uploader.delete_asset(clip["immich_asset_id"])
+        except uploaders.UploadError as error:
+            warning = "; ".join(part for part in (warning, f"The previous Immich asset was not deleted: {error.message}") if part)
+    return new_asset_id, warning
+
+
 def run_trim_job(payload: dict, progress) -> dict:
+    from app import settings
+
     clip_path = resolve_generated_clip(payload.get("file_path"))
     with lock_for_clip(clip_path):
         clip = clip_library.describe_clip(clip_path)
@@ -316,11 +358,15 @@ def run_trim_job(payload: dict, progress) -> dict:
                 temporary_path, progress, output_title=identity["clip_title"] if identity else None,
             )
             if payload["mode"] == "replace":
+                immich_asset_id, immich_warning = _auto_upload_replacement(temporary_path, clip)
                 os.replace(temporary_path, clip_path)
-                clip_library.update_clip_fields(payload["file_path"], {
+                changes = {
                     "original_start_time": _timestamp(absolute_start_ms),
                     "original_end_time": _timestamp(absolute_end_ms),
-                })
+                }
+                if immich_asset_id:
+                    changes["immich_asset_id"] = immich_asset_id
+                clip_library.update_clip_fields(payload["file_path"], changes)
                 _refresh_companions(clip_path)
                 result_clip = clip_library.describe_clip(clip_path)
             else:
@@ -339,7 +385,12 @@ def run_trim_job(payload: dict, progress) -> dict:
                     new_path.unlink(missing_ok=True)
                     raise
                 _refresh_companions(new_path)
-            return {"result": "success", "operation": payload["mode"], "clip": result_clip}
+            result = {"result": "success", "operation": payload["mode"], "clip": result_clip}
+            if payload["mode"] == "replace" and settings.get("immich_auto_upload") == "true":
+                result["immich_auto_upload_handled"] = True
+                if immich_warning:
+                    result["immich_auto_upload_warning"] = immich_warning
+            return result
         finally:
             temporary_path.unlink(missing_ok=True)
 

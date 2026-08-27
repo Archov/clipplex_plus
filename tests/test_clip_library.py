@@ -70,6 +70,15 @@ class ClipLibraryTests(unittest.TestCase):
         self.assertEqual(clip["original_end_time"], "00:01:15.000")
         self.assertEqual(clip["duration_ms"], 12500)
 
+    def test_immich_link_remains_available_when_the_api_key_is_missing(self):
+        clip_library.describe_clip(self.clip_path)
+        clip_library.update_clip_fields(self.clip_path, {"immich_asset_id": "asset-1"})
+
+        with patch("app.uploaders._setting", side_effect=lambda key: "https://immich.example/api" if key == "immich_url" else ""):
+            clip = clip_library.describe_clip(self.clip_path)
+
+        self.assertEqual(clip["immich_asset_url"], "https://immich.example/photos/asset-1")
+
     def test_edit_details_persists_without_rewriting_video(self):
         original_mtime = self.clip_path.stat().st_mtime_ns
 

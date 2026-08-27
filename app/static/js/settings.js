@@ -121,7 +121,8 @@
       helpLink.append(field.help_link_label || 'Help');
       label.append(' ', helpLink);
     }
-    wrapper.append(label);
+    const isCheckbox = field.kind === 'checkbox';
+    if (!isCheckbox) wrapper.append(label);
 
     let control;
     if (field.kind === 'select') {
@@ -136,13 +137,14 @@
     } else {
       control = document.createElement('input');
       control.type = field.kind || 'text';
-      if (!field.secret) control.value = field.value || '';
+      if (field.kind === 'checkbox') control.checked = field.value === 'true';
+      else if (!field.secret) control.value = field.value || '';
       if (field.secret) {
         control.autocomplete = 'new-password';
         control.placeholder = field.configured ? 'Saved — leave blank to keep it' : 'Not configured';
       }
     }
-    control.className = 'form-control';
+    control.className = isCheckbox ? 'form-check-input' : (field.kind === 'select' ? 'form-select' : 'form-control');
     control.id = id;
     control.name = field.key;
     control.dataset.settingKey = field.key;
@@ -154,7 +156,16 @@
       control.addEventListener('input', () => updateImmichApiKeyLink(control.value));
       control.addEventListener('change', () => updateImmichApiKeyLink(control.value));
     }
-    wrapper.append(control);
+    if (isCheckbox) {
+      control.setAttribute('role', 'switch');
+      const check = document.createElement('div');
+      check.className = 'form-check form-switch';
+      label.className = 'form-check-label';
+      check.append(control, label);
+      wrapper.append(check);
+    } else {
+      wrapper.append(control);
+    }
 
     const help = document.createElement('div');
     help.className = 'form-text';
@@ -205,6 +216,17 @@
       testButton.addEventListener('click', () => testService(section.id, testButton));
       body.append(testButton);
     }
+    if (section.id === 'immich') {
+      const configured = settingsModel?.fields.find(field => field.key === 'immich_url')?.value &&
+        settingsModel?.fields.find(field => field.key === 'immich_api_key')?.configured;
+      if (configured) {
+        const bulk = document.createElement('button');
+        bulk.className = 'btn btn-outline-primary btn-sm ms-2'; bulk.type = 'button';
+        bulk.textContent = 'Upload all non-uploaded clips';
+        bulk.addEventListener('click', () => queueMissingImmichUploads(bulk));
+        body.append(bulk);
+      }
+    }
     card.append(body);
     column.append(card);
     return column;
@@ -241,6 +263,39 @@
     }
   }
 
+  async function queueMissingImmichUploads(button) {
+    button.disabled = true;
+    try {
+      const response = await fetch('/api/immich/uploads/missing', {method: 'POST'});
+      const payload = await response.json();
+      if (!response.ok) throw new Error(payload.message || 'Could not queue Immich uploads.');
+      showNotice('Missing clips are queued for Immich upload.', 'info');
+      while (true) {
+        const statusResponse = await fetch(payload.status_url || `/api/jobs/${encodeURIComponent(payload.job_id)}`, {cache: 'no-store'});
+        const job = await statusResponse.json();
+        if (!statusResponse.ok) throw new Error(job.message || 'Could not read Immich upload progress.');
+        if (job.status === 'queued' || job.status === 'running') {
+          button.textContent = `Uploading… ${Math.round(Number(job.overall_progress) || 0)}%`;
+          await new Promise(resolve => window.setTimeout(resolve, 750));
+          continue;
+        }
+        if (job.status !== 'succeeded') throw new Error((job.error && job.error.message) || job.message || 'Immich bulk upload failed.');
+        const result = job.result || {};
+        const completed = Number(result.completed) || 0;
+        const failed = Number(result.failed) || 0;
+        const warningCount = Array.isArray(result.warnings) ? result.warnings.length : 0;
+        const summary = `${completed} completed, ${failed} failed` + (warningCount ? `, ${warningCount} with warnings.` : '.');
+        showNotice(summary, failed || warningCount ? 'warning' : 'success');
+        break;
+      }
+    } catch (error) {
+      showNotice(error.message, 'danger');
+    } finally {
+      button.disabled = false;
+      button.textContent = 'Upload all non-uploaded clips';
+    }
+  }
+
   form.addEventListener('submit', async event => {
     event.preventDefault();
     const values = {};
@@ -248,7 +303,7 @@
     form.querySelectorAll('[data-setting-key]').forEach(control => {
       if (control.disabled) return;
       if (control.dataset.secret === 'true' && !control.value) return;
-      values[control.dataset.settingKey] = control.value;
+      values[control.dataset.settingKey] = control.type === 'checkbox' ? String(control.checked) : control.value;
     });
     form.querySelectorAll('[data-clear-key]:checked').forEach(control => {
       delete values[control.dataset.clearKey];

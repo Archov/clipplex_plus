@@ -50,6 +50,7 @@ Clipplex targets Immich v1.135 or newer for creating a restricted API key throug
 
 ```text
 asset.upload
+asset.update
 tag.read
 tag.create
 tag.asset
@@ -58,7 +59,7 @@ album.create
 albumAsset.create
 ```
 
-These permissions allow Clipplex to upload the video (`asset.upload`), list, create, and assign tags (`tag.read`, `tag.create`, and `tag.asset`), and list, create, and add assets to albums (`album.read`, `album.create`, and `albumAsset.create`). The `all` permission and asset read, update, delete, download, or sharing permissions are not required on supported Immich versions.
+These permissions allow Clipplex to upload the video (`asset.upload`), keep the Immich description synchronized with the clip title (`asset.update`), list, create, and assign tags (`tag.read`, `tag.create`, and `tag.asset`), and list, create, and add assets to albums (`album.read`, `album.create`, and `albumAsset.create`). Enable **Manage Immich clips after upload** only when the key also has `asset.delete`; that setting permits deleting the linked Immich asset from Clipplex and replacing an older linked asset after an automatic replacement upload.
 
 Finding Plex token: https://support.plex.tv/articles/204059436-finding-an-authentication-token-x-plex-token/
 

@@ -44,11 +44,19 @@ class SettingsUiTests(unittest.TestCase):
             "https://support.plex.tv/articles/204059436-finding-an-authentication-token-x-plex-token/",
         )
         self.assertEqual(fields["immich_api_key"]["permissions"], [
-            "asset.upload", "tag.read", "tag.create", "tag.asset",
+            "asset.upload", "asset.update", "tag.read", "tag.create", "tag.asset",
             "album.read", "album.create", "albumAsset.create",
         ])
+        self.assertNotIn("immich_auto_tag_mode", fields)
         self.assertNotIn('"value":"plex-token"', response.get_data(as_text=True))
         self.assertNotIn("flask_secret_key", fields)
+
+        script_response = self.client.get("/static/js/settings.js")
+        script = script_response.get_data(as_text=True)
+        script_response.close()
+        self.assertIn("Uploading…", script)
+        self.assertIn("result.completed", script)
+        self.assertIn("result.failed", script)
 
     def test_patch_persists_secret_without_disclosing_it(self):
         response = self.client.patch("/api/settings", json={
@@ -70,6 +78,34 @@ class SettingsUiTests(unittest.TestCase):
         with patch.dict(os.environ, {}, clear=True):
             self.assertEqual(settings.get("immich_default_tag"), "")
             self.assertEqual(settings.get("ffmpeg_preset"), "veryfast")
+
+    def test_patch_persists_automatic_immich_options(self):
+        response = self.client.patch("/api/settings", json={
+            "values": {
+                "immich_auto_upload": "true",
+                "immich_manage_assets": "true",
+                "immich_auto_tag_library": "true",
+            },
+            "clear": [],
+        })
+        self.assertEqual(response.status_code, 200)
+        with patch.dict(os.environ, {}, clear=True):
+            self.assertEqual(settings.get("immich_auto_tag_library"), "true")
+
+    def test_automatic_immich_options_default_off_and_reject_invalid_values(self):
+        fields = {field["key"]: field for field in self.client.get("/api/settings").get_json()["fields"]}
+        for key in (
+            "immich_auto_upload", "immich_manage_assets", "immich_auto_tag_library",
+            "immich_auto_tag_title", "immich_auto_tag_episode",
+        ):
+            self.assertEqual(fields[key]["value"], "false")
+            self.assertIsNone(fields[key]["environment"])
+
+        response = self.client.patch("/api/settings", json={
+            "values": {"immich_manage_assets": "yes"}, "clear": [],
+        })
+        self.assertEqual(response.status_code, 400)
+        self.assertEqual(settings.get("immich_manage_assets"), "false")
 
     def test_patch_rejects_service_urls_with_unsupported_components(self):
         invalid_urls = (

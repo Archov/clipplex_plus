@@ -7,7 +7,7 @@ import shutil
 import sqlite3
 import ffmpeg
 
-from app import app
+from app import app, uploaders
 from app.jobs import JobFailure, JobQueueFull
 import clipplexAPI
 
@@ -179,11 +179,14 @@ class CreateVideoRouteTests(unittest.TestCase):
         self.assertIn("saveLatestTitle", page)
         self.assertIn("/api/clips/metadata", page)
         self.assertIn("slice(0, 1)", page)
+        self.assertIn("Apply configured hierarchical tags", page)
+        self.assertIn("alert.textContent = message", page)
+        self.assertIn("immichJobWarning", page)
 
     @patch("app.routes.clipplexAPI.Utils.get_videos_in_folder")
     def test_make_clip_page_renders_only_the_newest_clip(self, videos):
         videos.return_value = [
-            {"file_path": "static/media/videos/new.mp4", "title": "Newest", "show": "", "original_start_time": "00:00:01.000", "username": "alice", "episode_number": "", "season_number": "", "display_heading": "Newest", "media_type": "movie"},
+            {"file_path": "static/media/videos/new.mp4", "title": "Newest", "show": "", "original_start_time": "00:00:01.000", "username": "alice", "episode_number": "", "season_number": "", "display_heading": "Newest", "media_type": "movie", "immich_asset_id": "asset-1", "immich_can_delete": True},
             {"file_path": "static/media/videos/old.mp4", "title": "Old", "show": "", "original_start_time": "00:00:01.000", "username": "alice", "episode_number": "", "season_number": "", "display_heading": "Old", "media_type": "movie"},
         ]
 
@@ -194,6 +197,8 @@ class CreateVideoRouteTests(unittest.TestCase):
         self.assertIn('class="btn btn-sm btn-outline-secondary edit-latest-title"', page)
         self.assertIn('class="btn btn-outline-success save-latest-title"', page)
         self.assertIn('class="btn btn-outline-secondary cancel-latest-title"', page)
+        self.assertIn('data-immich-can-delete="true"', page)
+        self.assertIn('data-immich-asset-id="asset-1"', page)
 
     @patch("app.routes.clip_library.list_clips", return_value=[])
     def test_library_page_has_collapsible_filters_views_and_bottom_action(self, clips):
@@ -213,11 +218,14 @@ class CreateVideoRouteTests(unittest.TestCase):
         self.assertNotIn('id="clip_source_select"', page)
         self.assertNotIn("Choose a different source", page)
         self.assertIn('id="edit_custom_title"', page)
+        self.assertIn('id="library_apply_auto_tags"', page)
         self.assertLess(page.index('id="library_groups"'), page.index("Make a clip"))
         self.assertIn('aria-current="page"', page)
 
         script_response = self.client.get("/static/js/clip_library.js")
         library_script = script_response.get_data(as_text=True)
+        self.assertIn("payload.apply_auto_tags", library_script)
+        self.assertIn("immichJobWarning", library_script)
         script_response.close()
         self.assertIn("collapsedLibraries: new Set()", library_script)
         self.assertIn("toggle.setAttribute('aria-expanded'", library_script)
@@ -533,6 +541,107 @@ class CreateVideoRouteTests(unittest.TestCase):
         })
         self.assertEqual(response.status_code, 400)
         self.assertIn("tag_ids", response.get_json()["message"])
+
+    @patch("app.routes.uploaders.upload_clip")
+    def test_unified_upload_route_rejects_non_boolean_hierarchy_flag(self, upload):
+        response = self.client.post("/api/uploads", json={
+            "file_path": "static/media/videos/clip.mp4",
+            "uploader": "immich",
+            "apply_auto_tags": "false",
+        })
+
+        self.assertEqual(response.status_code, 400)
+        self.assertIn("apply_auto_tags", response.get_json()["message"])
+        upload.assert_not_called()
+
+    def test_delete_route_rejects_non_boolean_remote_delete_flag(self):
+        response = self.client.delete("/api/clips", json={
+            "file_path": "static/media/videos/clip.mp4",
+            "delete_immich_asset": "false",
+        })
+
+        self.assertEqual(response.status_code, 400)
+        self.assertIn("delete_immich_asset", response.get_json()["message"])
+
+    def test_remote_delete_failure_retains_the_local_clip(self):
+        with patch("app.routes.clip_library.describe_clip", return_value={"immich_asset_id": "asset-1"}), \
+             patch("app.routes.settings.get", return_value="true"), \
+             patch("app.routes.uploaders.ImmichUploader") as immich, \
+             patch("app.routes.delete_generated_clip") as delete_local:
+            immich.return_value.delete_asset.side_effect = uploaders.UploadError("Delete denied")
+            response = self.client.delete("/api/clips", json={
+                "file_path": "static/media/videos/clip.mp4", "delete_immich_asset": True,
+            })
+
+        self.assertEqual(response.status_code, 502)
+        self.assertIn("Delete denied", response.get_json()["message"])
+        delete_local.assert_not_called()
+
+    def test_remote_delete_is_rejected_while_asset_management_is_disabled(self):
+        with patch("app.routes.clip_library.describe_clip", return_value={"immich_asset_id": "asset-1"}), \
+             patch("app.routes.settings.get", return_value="false"), \
+             patch("app.routes.uploaders.ImmichUploader") as immich, \
+             patch("app.routes.delete_generated_clip") as delete_local:
+            response = self.client.delete("/api/clips", json={
+                "file_path": "static/media/videos/clip.mp4", "delete_immich_asset": True,
+            })
+
+        self.assertEqual(response.status_code, 400)
+        immich.return_value.delete_asset.assert_not_called()
+        delete_local.assert_not_called()
+
+    def test_title_sync_failure_is_logged_after_local_save(self):
+        previous = {"clip_title": "Old", "immich_asset_id": "asset-1"}
+        saved = {"clip_title": "New", "immich_asset_id": "asset-1"}
+        with patch("app.routes.clip_library.describe_clip", return_value=previous), \
+             patch("app.routes.clip_library.save_clip_metadata", return_value=saved), \
+             patch("app.routes.uploaders.ImmichUploader") as immich, \
+             patch("app.routes.app.logger.warning") as warning_log:
+            immich.return_value._update_description.side_effect = uploaders.UploadError("Permission denied")
+            response = self.client.patch("/api/clips/metadata", json={"file_path": "static/media/videos/clip.mp4"})
+
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.get_json()["clip"]["clip_title"], "New")
+        self.assertIn("Permission denied", response.get_json()["warning"])
+        warning_log.assert_called_once()
+
+    @patch("app.routes.clip_library.update_clip_fields")
+    @patch("app.routes.uploaders.upload_clip")
+    def test_bulk_immich_job_reports_completed_failed_and_warning_counts(self, upload, update):
+        import app.routes as routes
+        upload.side_effect = [
+            ({
+                "result": "partial_success", "asset_id": "asset-1",
+                "failures": [{"step": "description", "message": "Description denied"}],
+            }, 207),
+            uploaders.UploadError("Upload denied"),
+        ]
+
+        result = routes.run_media_job({
+            "job_type": "immich_bulk_upload",
+            "file_paths": ["static/media/videos/one.mp4", "static/media/videos/two.mp4"],
+        }, lambda *args: None)
+
+        self.assertEqual(result["result"], "partial_success")
+        self.assertEqual(result["completed"], 1)
+        self.assertEqual(result["failed"], 1)
+        self.assertEqual(len(result["warnings"]), 1)
+        self.assertEqual(len(result["failures"]), 1)
+        update.assert_called_once_with("static/media/videos/one.mp4", {"immich_asset_id": "asset-1"})
+
+    def test_bulk_immich_endpoint_queues_only_unlinked_clips(self):
+        with patch("app.routes.uploaders.configured_uploader_ids", return_value={"immich"}), \
+             patch("app.routes.clip_library.list_clips", return_value=[
+                 {"file_path": "static/media/videos/missing.mp4", "immich_asset_id": ""},
+                 {"file_path": "static/media/videos/linked.mp4", "immich_asset_id": "asset-1"},
+             ]), patch("app.routes.clip_job_manager.enqueue", return_value="job-1") as enqueue:
+            response = self.client.post("/api/immich/uploads/missing")
+
+        self.assertEqual(response.status_code, 202)
+        self.assertEqual(response.get_json()["status_url"], "/api/jobs/job-1")
+        enqueue.assert_called_once_with({
+            "job_type": "immich_bulk_upload", "file_paths": ["static/media/videos/missing.mp4"],
+        })
 
     @patch("app.routes.uploaders.upload_clip")
     def test_legacy_streamable_route_uses_shared_uploader(self, upload):

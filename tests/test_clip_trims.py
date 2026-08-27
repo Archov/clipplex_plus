@@ -160,6 +160,37 @@ class ClipTrimValidationTests(unittest.TestCase):
         finally:
             original_path.unlink(missing_ok=True)
 
+    def test_unmanaged_replacement_upload_keeps_the_previous_remote_asset(self):
+        clip = {"clip_title": "Clip", "immich_asset_id": "old-asset"}
+        setting_values = {"immich_auto_upload": "true", "immich_manage_assets": "false"}
+        with patch("app.settings.get", side_effect=lambda key: setting_values.get(key, "")), \
+             patch("app.uploaders.configured_uploader_ids", return_value={"immich"}), \
+             patch("app.uploaders.ImmichUploader") as immich:
+            immich.return_value.upload.return_value = ({"asset_id": "new-asset", "failures": []}, 200)
+            asset_id, warning = clip_trims._auto_upload_replacement(self.clip_path, clip)
+
+        self.assertEqual(asset_id, "new-asset")
+        self.assertEqual(warning, "")
+        immich.return_value.delete_asset.assert_not_called()
+
+    def test_managed_replacement_retains_new_id_and_warns_when_old_cleanup_fails(self):
+        from app import uploaders
+        clip = {"clip_title": "Clip", "immich_asset_id": "old-asset"}
+        setting_values = {"immich_auto_upload": "true", "immich_manage_assets": "true"}
+        with patch("app.settings.get", side_effect=lambda key: setting_values.get(key, "")), \
+             patch("app.uploaders.configured_uploader_ids", return_value={"immich"}), \
+             patch("app.uploaders.ImmichUploader") as immich:
+            immich.return_value.upload.return_value = ({
+                "asset_id": "new-asset", "failures": [{"message": "Description denied"}],
+            }, 207)
+            immich.return_value.delete_asset.side_effect = uploaders.UploadError("Delete denied")
+            asset_id, warning = clip_trims._auto_upload_replacement(self.clip_path, clip)
+
+        self.assertEqual(asset_id, "new-asset")
+        self.assertIn("Description denied", warning)
+        self.assertIn("previous Immich asset was not deleted", warning)
+        immich.return_value.delete_asset.assert_called_once_with("old-asset")
+
 
 class SyntheticClipTrimTests(unittest.TestCase):
     def setUp(self):
