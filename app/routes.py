@@ -1,3 +1,4 @@
+import sqlite3
 import time
 import ffmpeg
 from flask import render_template, redirect, request, jsonify, Response, send_file
@@ -73,7 +74,13 @@ def session_preview():
 
 @app.route("/api/clips", methods=["GET"])
 def created_clips():
-    return jsonify({"clips": clipplexAPI.Utils.get_videos_in_folder()})
+    try:
+        return jsonify({"clips": clip_library.list_clips(sort=request.args.get("sort", "newest"))})
+    except MediaFileError as error:
+        return jsonify({"message": error.message}), error.status_code
+    except (OSError, ffmpeg.Error, sqlite3.Error):
+        app.logger.exception("Could not list clips")
+        return jsonify({"message": "The clip library could not be loaded."}), 500
 
 
 @app.route("/api/clips/metadata", methods=["PATCH"])
@@ -86,7 +93,7 @@ def update_clip_metadata():
         return jsonify({"result": "success", "clip": clip})
     except MediaFileError as error:
         return jsonify({"result": "error", "message": error.message}), error.status_code
-    except (OSError, ffmpeg.Error):
+    except (OSError, ffmpeg.Error, sqlite3.Error):
         app.logger.exception("Could not save clip metadata")
         return jsonify({"result": "error", "message": "The clip details could not be saved."}), 500
 
@@ -273,10 +280,14 @@ def timed_video():
 
 @app.route("/clip_library.html", methods=["GET"])
 def clip_library_page():
+    sort = request.args.get("sort", "newest")
+    if sort not in clip_library.SORT_ORDERS:
+        sort = "newest"
     return render_template(
         "clip_library.html",
         title="Clip Library",
-        clips=clip_library.list_clips(),
+        clips=clip_library.list_clips(sort=sort),
+        selected_sort=sort,
         active_page="clip_library",
     )
 

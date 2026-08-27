@@ -188,8 +188,9 @@ class SavedSource:
         }
         self.metadata_element = ET.Element("Video", {key: str(value) for key, value in attributes.items() if value != ""})
         self.metadata_part = self.session_part = None
-        self.plex_url = (os.environ.get("PLEX_URL") or "").rstrip("/")
-        self.headers = {"X-Plex-Token": os.environ.get("PLEX_TOKEN") or ""}
+        from app import settings
+        self.plex_url = settings.get("plex_url").rstrip("/")
+        self.headers = {"X-Plex-Token": settings.get("plex_token")}
 
 
 def _render_from_source(source: dict, clip: dict, seek_start_ms: int, metadata_start_ms: int, end_ms: int, output_path: Path, progress, preview=False, output_title=None):

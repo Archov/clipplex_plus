@@ -3,6 +3,9 @@
 
   const dataNode = document.getElementById('clip_library_data');
   let clips = JSON.parse(dataNode ? dataNode.textContent : '[]');
+  let refreshRequest = 0;
+  const validSorts = ['newest', 'oldest', 'title_asc', 'title_desc', 'duration_asc', 'duration_desc'];
+  const storedSort = localStorage.getItem('clipplex.librarySort');
   const state = {
     view: localStorage.getItem('clipplex.libraryView') === 'list' ? 'list' : 'grid',
     size: ['small', 'medium', 'large'].includes(localStorage.getItem('clipplex.librarySize')) ? localStorage.getItem('clipplex.librarySize') : 'medium',
@@ -13,6 +16,7 @@
     searchTimer: null,
     uploaders: [],
     immichLoaded: false,
+    sort: validSorts.includes(storedSort) ? storedSort : (dataNode?.dataset.sort || 'newest'),
   };
 
   const byId = id => document.getElementById(id);
@@ -179,10 +183,7 @@
       groupHeader.append(title, count);
       const grid = document.createElement('div');
       grid.className = 'clip-card-grid';
-      grouped.get(library)
-        .slice()
-        .sort((a, b) => titleKey(a).localeCompare(titleKey(b)) || String(a.episode_code).localeCompare(String(b.episode_code)) || String(b.created_at).localeCompare(String(a.created_at)))
-        .forEach(clip => grid.appendChild(buildClipCard(clip)));
+      grouped.get(library).forEach(clip => grid.appendChild(buildClipCard(clip)));
       section.append(groupHeader, grid);
       libraryRoot.appendChild(section);
     });
@@ -207,6 +208,17 @@
     alert.textContent = message;
     byId('library_notice').replaceChildren(alert);
     window.setTimeout(() => { if (alert.isConnected) alert.remove(); }, 5000);
+  }
+
+  async function refreshClips() {
+    const request = ++refreshRequest;
+    const sort = state.sort;
+    const response = await fetch(`/api/clips?sort=${encodeURIComponent(sort)}`, {cache: 'no-store'});
+    const result = await response.json();
+    if (request !== refreshRequest) return;
+    if (!response.ok) throw new Error(result.message || 'The clip library could not be refreshed.');
+    clips = result.clips || [];
+    render();
   }
 
   function openPlayer(clip) {
@@ -263,10 +275,10 @@
       const response = await fetch('/api/clips/metadata', {method: 'PATCH', headers: {'Content-Type': 'application/json'}, body: JSON.stringify(payload)});
       const result = await response.json();
       if (!response.ok) throw new Error(result.message || 'Clip details could not be saved.');
-      clips = clips.map(clip => clip.file_path === result.clip.file_path ? result.clip : clip);
       bootstrap.Modal.getInstance(byId('edit_clip_modal')).hide();
-      render();
       notice('Clip details saved.');
+      try { await refreshClips(); }
+      catch (error) { notice(`Clip details were saved, but the library could not refresh: ${error.message}`, 'warning'); }
     } catch (error) {
       byId('edit_clip_error').textContent = error.message;
       byId('edit_clip_error').classList.remove('d-none');
@@ -302,11 +314,11 @@
       const response = await fetch('/api/clips', {method: 'DELETE', headers: {'Content-Type': 'application/json'}, body: JSON.stringify({file_path: path})});
       const result = await response.json();
       if (!response.ok) throw new Error(result.message || 'The clip could not be deleted.');
-      clips = clips.filter(clip => clip.file_path !== path);
       state.deletingPath = null;
       bootstrap.Modal.getInstance(byId('delete_clip_modal')).hide();
-      render();
       notice('Clip deleted.');
+      try { await refreshClips(); }
+      catch (error) { notice(`The clip was deleted, but the library could not refresh: ${error.message}`, 'warning'); }
     } catch (error) {
       byId('delete_clip_error').textContent = error.message;
       byId('delete_clip_error').classList.remove('d-none');
@@ -463,6 +475,13 @@
   byId('list_view').addEventListener('click', () => { state.view = 'list'; localStorage.setItem('clipplex.libraryView', state.view); render(); });
   byId('grid_size').value = state.size;
   byId('grid_size').addEventListener('change', event => { state.size = event.target.value; localStorage.setItem('clipplex.librarySize', state.size); render(); });
+  byId('sort_order').value = state.sort;
+  byId('sort_order').addEventListener('change', async event => {
+    state.sort = event.target.value;
+    localStorage.setItem('clipplex.librarySort', state.sort);
+    try { await refreshClips(); }
+    catch (error) { notice(error.message, 'danger'); }
+  });
   byId('edit_media_type').addEventListener('change', updateEditFields);
   byId('edit_clip_form').addEventListener('submit', saveEdit);
   byId('confirm_delete_clip').addEventListener('click', confirmDelete);
@@ -471,19 +490,15 @@
   byId('player_modal').addEventListener('hidden.bs.modal', () => { const player = byId('library_player'); player.pause(); player.removeAttribute('src'); player.removeAttribute('poster'); player.load(); });
   byId('library_upload_service').addEventListener('change', updateUploadOptions);
   byId('library_upload_submit').addEventListener('click', submitUpload);
-  document.addEventListener('clipplex:clip-saved', event => {
+  document.addEventListener('clipplex:clip-saved', async event => {
     const result = event.detail || {};
     if (!result.clip) return;
-    if (result.operation === 'replace') {
-      clips = clips.map(clip => clip.file_path === result.clip.file_path ? result.clip : clip);
-      notice('Clip replaced.');
-    } else {
-      clips = [result.clip, ...clips.filter(clip => clip.file_path !== result.clip.file_path)];
-      notice('Trimmed copy saved.');
-    }
-    render();
+    notice(result.operation === 'replace' ? 'Clip replaced.' : 'Trimmed copy saved.');
+    try { await refreshClips(); }
+    catch (error) { notice(`The clip was saved, but the library could not refresh: ${error.message}`, 'warning'); }
   });
 
   render();
+  if (state.sort !== (dataNode?.dataset.sort || 'newest')) refreshClips().catch(error => notice(error.message, 'danger'));
   loadUploaders();
 })();

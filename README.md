@@ -10,27 +10,35 @@ An in-depth paragraph about your project and overview of use.
 
 ## Docker deployment
 
-Copy `.env.sample` to `.env`, then configure these values:
+Copy `.env.sample` to `.env`, then configure the deployment paths and provide Plex credentials for the first startup:
 
 | Variable | Example | Requirement |
 | --- | --- | --- |
 | `MEDIA_PATH` | `/mnt/media` | Required host path containing Plex media |
 | `CLIP_PATH` | `/mnt/media-clips` | Required host path where generated clips are stored |
-| `PLEX_URL` | `http://plex:32400` | Required Plex server URL |
-| `PLEX_TOKEN` | `...` | Required Plex authentication token |
+| `PLEX_URL` | `http://plex:32400` | Required once; imported into SQLite |
+| `PLEX_TOKEN` | `...` | Required once; imported into SQLite |
 | `PUID` | `1000` | Optional runtime UID; defaults to 1000 |
 | `PGID` | `1000` | Optional runtime GID; defaults to 1000 |
 | `TZ` | `America/Chicago` | Optional container timezone |
-| `STREAMABLE_LOGIN` | `...` | Optional; Streamable requires both login and password |
-| `STREAMABLE_PASSWORD` | `...` | Optional; Streamable requires both login and password |
-| `IMMICH_URL` | `http://immich-server:2283` | Optional; Immich requires both URL and API key |
-| `IMMICH_API_KEY` | `...` | Optional; see the exact permissions below |
-| `IMMICH_DEFAULT_TAG` | `#plex-clip` | Optional tag applied to every Immich upload |
-| `FFMPEG_PRESET` | `veryfast` | Optional x264 speed/compression tradeoff |
+| `STREAMABLE_LOGIN` | `...` | Optional bootstrap setting; Streamable requires both values |
+| `STREAMABLE_PASSWORD` | `...` | Optional bootstrap setting; imported into SQLite |
+| `IMMICH_URL` | `http://immich-server:2283` | Optional bootstrap setting; Immich also requires an API key |
+| `IMMICH_API_KEY` | `...` | Optional bootstrap setting; see the exact permissions below |
+| `IMMICH_DEFAULT_TAG` | `#plex-clip` | Optional bootstrap setting applied to every Immich upload |
+| `FFMPEG_PRESET` | `veryfast` | Optional bootstrap setting; defaults to `veryfast` |
 
 `MEDIA_PATH` is mounted read-only at `/data/media`. Plex's reported media paths must be reachable at the same absolute paths inside Clipplex; adjust the Compose mount target if Plex uses a path other than `/data/media`.
 
 `CLIP_PATH` is mounted read/write at `/app/app/static/media`. The host directory or network share must allow the configured `PUID` and `PGID` to create files and directories. The container runs without root privileges.
+
+### Persistent settings and metadata
+
+Clipplex stores application settings, clip metadata, original-source provenance, and cached media analysis in `.clipplex/clipplex.sqlite3` inside `CLIP_PATH`. On startup, every nonblank application setting supplied through the environment is written to the database and overrides its stored value. Blank or missing variables leave the database value unchanged, so credentials may be removed from `.env` after one successful startup. Keep `MEDIA_PATH`, `CLIP_PATH`, `PUID`, `PGID`, and `TZ` in the deployment environment because Docker needs them before Clipplex can open its database.
+
+Existing `.clipplex/metadata/*.json` and adjacent `*.clipplex.json` files are imported automatically. A sidecar is deleted only after its database transaction commits. Malformed sidecars are retained and reported in the log so they can be repaired and retried.
+
+The SQLite file contains credentials in plaintext and must be protected like the old `.env` file. It is kept below the private `.clipplex` path, blocked from HTTP access, and restricted to the application user where the platform supports file permissions. Back up the complete `CLIP_PATH` volume to preserve both clips and their metadata.
 
 ### Immich API key permissions
 
@@ -54,9 +62,11 @@ Finding Plex token: https://support.plex.tv/articles/204059436-finding-an-authen
 
 ```sh
 cp .env.sample .env
-# Edit .env before starting the service.
+# Set the deployment paths and initial Plex credentials before the first start.
 docker compose up -d --build
 ```
+
+After the first successful start, remove `PLEX_URL`, `PLEX_TOKEN`, and any uploader credentials from `.env` if you do not want them to override the stored settings on later starts.
 
 Open `http://<docker-host>:9945`. Clipplex must be able to reach Plex over the configured network. View logs with:
 
@@ -79,6 +89,8 @@ Every saved clip has an **Export GIF** action. Clipplex creates a silent, loopin
 Exports are automatically reduced through several resolution, frame-rate, and color profiles until they fit below 9.5 MB. If a long or visually complex clip cannot meet that limit, create a shorter clip and try again. GIF does not support audio.
 
 Successful exports are cached under `static/media/gifs` within the configured `CLIP_PATH` mount. Re-exporting an unchanged clip reuses the cached file. Deleting the MP4 clip also deletes its cached GIF; GIFs do not appear as separate items in the clip library.
+
+The clip library can sort each media-library group by creation time, title, or duration. Probe-derived durations and embedded metadata are cached in SQLite and refreshed only when a clip's size or modification time changes.
 
 ## Authors
 

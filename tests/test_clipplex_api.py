@@ -14,6 +14,15 @@ import requests
 import clipplexAPI
 
 
+def isolate_database(test_case):
+    root = Path(__file__).resolve().parents[1] / "app" / "static" / "media" / f"api-db-{os.urandom(8).hex()}"
+    root.mkdir(parents=True)
+    test_case.addCleanup(shutil.rmtree, root, True)
+    database_patch = patch("app.database.DEFAULT_DATABASE_PATH", root / "clipplex.sqlite3")
+    database_patch.start()
+    test_case.addCleanup(database_patch.stop)
+
+
 SESSION_XML = b"""
 <MediaContainer size="1">
   <Video key="/library/metadata/1" ratingKey="1" sessionKey="9" viewOffset="65000" type="movie">
@@ -71,6 +80,9 @@ class FakeResponse:
 
 
 class PlexInfoTests(unittest.TestCase):
+    def setUp(self):
+        isolate_database(self)
+
     def build_plex(self, session_xml=SESSION_XML, metadata_xml=METADATA_XML):
         responses = [FakeResponse(session_xml), FakeResponse(metadata_xml)]
         with patch.dict(os.environ, {"PLEX_URL": "http://plex:32400", "PLEX_TOKEN": "secret"}), \
@@ -199,6 +211,9 @@ class PlexInfoTests(unittest.TestCase):
 
 
 class VideoCommandTests(unittest.TestCase):
+    def setUp(self):
+        isolate_database(self)
+
     def make_plex(self, video_stream=None):
         stream = {"index": 0, "codec_type": "video"}
         if video_stream:

@@ -2,6 +2,9 @@ from types import SimpleNamespace
 import unittest
 from unittest.mock import patch
 import os
+from pathlib import Path
+import shutil
+import sqlite3
 import ffmpeg
 
 from app import app
@@ -11,6 +14,12 @@ import clipplexAPI
 
 class CreateVideoRouteTests(unittest.TestCase):
     def setUp(self):
+        self.database_root = Path(__file__).resolve().parents[1] / "app" / "static" / "media" / f"route-db-{os.urandom(8).hex()}"
+        self.database_root.mkdir(parents=True)
+        self.addCleanup(shutil.rmtree, self.database_root, True)
+        self.database_patch = patch("app.database.DEFAULT_DATABASE_PATH", self.database_root / "clipplex.sqlite3")
+        self.database_patch.start()
+        self.addCleanup(self.database_patch.stop)
         app.config.update(TESTING=True, WTF_CSRF_ENABLED=False)
         self.client = app.test_client()
         self.query = (
@@ -188,6 +197,8 @@ class CreateVideoRouteTests(unittest.TestCase):
         self.assertIn('id="grid_view"', page)
         self.assertIn('id="list_view"', page)
         self.assertIn('id="grid_size"', page)
+        self.assertIn('id="sort_order"', page)
+        self.assertIn('value="duration_desc"', page)
         self.assertIn("/static/js/clip_library.js", page)
         self.assertIn("/static/js/clip_trimmer.js", page)
         self.assertIn('id="clip_trim_modal"', page)
@@ -198,6 +209,26 @@ class CreateVideoRouteTests(unittest.TestCase):
         self.assertIn('id="edit_custom_title"', page)
         self.assertLess(page.index('id="library_groups"'), page.index("Make a clip"))
         self.assertIn('aria-current="page"', page)
+
+    @patch("app.routes.clip_library.list_clips", return_value=[])
+    def test_clips_api_forwards_valid_sort_order(self, clips):
+        response = self.client.get("/api/clips?sort=duration_desc")
+
+        self.assertEqual(response.status_code, 200)
+        clips.assert_called_once_with(sort="duration_desc")
+
+    def test_clips_api_rejects_invalid_sort_order(self):
+        response = self.client.get("/api/clips?sort=drop-table")
+
+        self.assertEqual(response.status_code, 400)
+        self.assertIn("Unsupported", response.get_json()["message"])
+
+    @patch("app.routes.clip_library.list_clips", side_effect=sqlite3.OperationalError("locked"))
+    def test_clips_api_returns_json_for_database_failures(self, _clips):
+        response = self.client.get("/api/clips")
+
+        self.assertEqual(response.status_code, 500)
+        self.assertEqual(response.get_json()["message"], "The clip library could not be loaded.")
 
     @patch("app.routes.clip_library.save_clip_metadata")
     def test_clip_metadata_patch_returns_updated_clip(self, save):

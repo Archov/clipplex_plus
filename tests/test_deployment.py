@@ -39,6 +39,12 @@ class DeploymentConfigurationTests(unittest.TestCase):
             script,
         )
 
+    def test_wsgi_startup_validates_settings_and_synchronizes_storage(self):
+        main = (REPOSITORY_ROOT / "main.py").read_text(encoding="utf-8")
+
+        self.assertIn("require_plex_settings()", main)
+        self.assertIn("clip_library.sync_library()", main)
+
     def test_compose_maps_the_configured_runtime_identity(self):
         compose = (REPOSITORY_ROOT / "docker-compose.yml").read_text(encoding="utf-8")
         environment_sample = (REPOSITORY_ROOT / ".env.sample").read_text(encoding="utf-8")
@@ -48,7 +54,8 @@ class DeploymentConfigurationTests(unittest.TestCase):
         self.assertIn("PUID=1000", environment_sample)
         self.assertIn("PGID=1000", environment_sample)
         self.assertIn("TZ=America/Chicago", environment_sample)
-        self.assertIn("FFMPEG_PRESET=veryfast", environment_sample)
+        self.assertIn("FFMPEG_PRESET=", environment_sample)
+        self.assertNotIn("ENV FFMPEG_PRESET", (REPOSITORY_ROOT / "Dockerfile").read_text(encoding="utf-8"))
         self.assertIn("${MEDIA_PATH}:/data/media:ro", compose)
         self.assertIn("${CLIP_PATH}:/app/app/static/media", compose)
 
@@ -74,6 +81,8 @@ class DeploymentConfigurationTests(unittest.TestCase):
         self.assertIn("trusted LAN or VPN", readme)
         self.assertIn("Export GIF", readme)
         self.assertIn("below 9.5 MB", readme)
+        self.assertIn("clipplex.sqlite3", readme)
+        self.assertIn("may be removed from `.env`", readme)
 
 
 if __name__ == "__main__":
