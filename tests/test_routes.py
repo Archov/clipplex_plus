@@ -2,6 +2,7 @@ from types import SimpleNamespace
 import unittest
 from unittest.mock import patch
 import os
+import ffmpeg
 
 from app import app
 from app.jobs import JobFailure, JobQueueFull
@@ -210,6 +211,16 @@ class CreateVideoRouteTests(unittest.TestCase):
         self.assertEqual(response.status_code, 200)
         self.assertEqual(response.get_json()["clip"]["display_heading"], "King Kong (1933)")
 
+    @patch("app.routes.clip_library.save_clip_metadata")
+    def test_clip_metadata_patch_returns_json_for_storage_and_probe_failures(self, save):
+        for failure in (OSError("disk unavailable"), ffmpeg.Error("ffprobe", b"", b"failed")):
+            with self.subTest(failure=type(failure).__name__):
+                save.side_effect = failure
+                response = self.client.patch("/api/clips/metadata", json={"file_path": "static/media/videos/clip.mp4"})
+                self.assertEqual(response.status_code, 500)
+                self.assertEqual(response.content_type, "application/json")
+                self.assertIn("could not be saved", response.get_json()["message"])
+
     @patch("app.routes.delete_generated_clip")
     def test_json_delete_endpoint_deletes_selected_clip(self, delete):
         response = self.client.delete("/api/clips", json={"file_path": "static/media/videos/clip.mp4"})
@@ -308,12 +319,14 @@ class CreateVideoRouteTests(unittest.TestCase):
             ),
         )
 
+        thumbnail.side_effect = OSError("thumbnail disk unavailable")
         result = __import__("app.routes", fromlist=["get_instant_video"]).get_instant_video(
             session_id="session-1", start_ms=10123, end_ms=14567,
             expected_media_identity="1", expected_session_id="session-1",
         )
 
         self.assertEqual(result["result"], "success")
+        self.assertEqual(result["clip"], {"file_path": "static/media/videos/clip.mp4"})
         self.assertEqual(video.call_args.args[1], 10123)
         self.assertAlmostEqual(video.call_args.args[2], 4.444)
         progress_callback = video.return_value.extract_video.call_args.args[0]

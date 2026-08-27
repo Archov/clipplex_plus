@@ -184,6 +184,13 @@ class SyntheticClipTrimTests(unittest.TestCase):
 
     def test_save_new_renders_exact_range_and_adjusts_absolute_metadata(self):
         clip = clip_library.describe_clip(self.clip_path)
+        source_numbers = [
+            int(item.get("clip_number") or 0)
+            for item in clip_library.list_clips(persist=False)
+            if item.get("source_key") == clip["source_key"]
+        ]
+        expected_number = max(source_numbers, default=0) + 1
+        expected_title = "Synthetic (2026)" + (f" - {expected_number}" if expected_number > 1 else "")
         payload = clip_trims.validate_trim_payload({
             "file_path": clip["file_path"], "expected_revision": clip["revision"],
             "start_ms": 500, "end_ms": 1750, "basis": "clip", "mode": "new",
@@ -195,7 +202,7 @@ class SyntheticClipTrimTests(unittest.TestCase):
         self.assertEqual(result["operation"], "new")
         self.assertEqual(created["original_start_time"], "00:10:00.500")
         self.assertEqual(created["original_end_time"], "00:10:01.750")
-        self.assertEqual(created["clip_title"], "Synthetic (2026) - 2")
+        self.assertEqual(created["clip_title"], expected_title)
         self.assertAlmostEqual(created["duration_ms"], 1250, delta=100)
 
     def test_failed_replacement_keeps_original_bytes(self):

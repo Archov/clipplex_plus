@@ -83,7 +83,7 @@ if (-not $env:PLEX_TOKEN) {
 # Prerequisite checks
 # ============================================================
 
-if (-not (Get-Command python -ErrorAction SilentlyContinue)) {
+if (-not (Get-Command py -ErrorAction SilentlyContinue)) {
     throw "Python launcher 'py' was not found. Install Python 3.11 first."
 }
 

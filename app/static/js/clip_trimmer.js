@@ -31,16 +31,14 @@
     return clip.display_heading || clip.title || 'Untitled movie';
   }
 
-  async function suggestedTitle(clip) {
-    try {
-      const response = await fetch('/api/clips', {cache: 'no-store'});
-      const payload = await response.json();
-      const sameSource = (payload.clips || []).filter(item => item.source_key === clip.source_key);
-      const number = Math.max(0, ...sameSource.map(item => Number(item.clip_number) || 0)) + 1;
-      return baseTitle(clip) + (number > 1 ? ` - ${number}` : '');
-    } catch (error) {
-      return `${clip.clip_title || baseTitle(clip)} - 2`;
-    }
+  function suggestedTitle(clip, loadedClips = null, nextClipNumber = null) {
+    const suppliedNumber = Number(nextClipNumber);
+    const sameSource = Array.isArray(loadedClips)
+      ? loadedClips.filter(item => item.source_key === clip.source_key)
+      : [clip];
+    const inferredNumber = Math.max(Number(clip.clip_number) || 0, ...sameSource.map(item => Number(item.clip_number) || 0)) + 1;
+    const number = suppliedNumber > 0 ? suppliedNumber : Math.max(1, inferredNumber);
+    return baseTitle(clip) + (number > 1 ? ` - ${number}` : '');
   }
 
   function error(message) {
@@ -99,10 +97,10 @@
     }
   }
 
-  function applyTimeInput(event, boundary, restoreInvalid = false) {
+  function applyTimeInput(event, boundary) {
     const value = parseTime(event.target.value);
     if (value === null) {
-      if (restoreInvalid) updateRange();
+      updateRange();
       return;
     }
     if (boundary === 'start') {
@@ -268,14 +266,14 @@
     } catch (saveError) { showOnly('clip_trim_editor'); setBusy(false); error(saveError.message); }
   }
 
-  async function open(clip, basis = 'clip') {
+  function open(clip, basis = 'clip', loadedClips = null, nextClipNumber = null) {
     state.clip = clip; state.basis = basis; state.titleDirty = false; state.hasEditor = false; clearError(); stopPreview();
     byId('clip_trim_title').textContent = basis === 'original' ? 'Extend from original' : `Trim ${clip.clip_title || clip.display_heading || 'clip'}`;
     byId('clip_trim_subtitle').textContent = basis === 'original' ? (clip.clip_title || '') : 'Move either boundary inward, then preview before saving.';
-    byId('trim_new_title').value = 'Loading title…'; byId('trim_new_title').disabled = true;
+    state.titleSuggested = suggestedTitle(clip, loadedClips, nextClipNumber);
+    byId('trim_new_title').value = state.titleSuggested;
+    byId('trim_new_title').disabled = false;
     bootstrap.Modal.getOrCreateInstance(byId('clip_trim_modal')).show();
-    state.titleSuggested = await suggestedTitle(clip);
-    byId('trim_new_title').value = state.titleSuggested; byId('trim_new_title').disabled = false;
     if (basis === 'clip') {
       state.sourceDuration = Number(clip.duration_ms) || 0;
       showEditor(clip.file_path, 0, state.sourceDuration, 0, state.sourceDuration);
@@ -286,10 +284,8 @@
 
   byId('clip_trim_start_range').addEventListener('input', event => setSelection(state.windowStart + Number(event.target.value), state.selectionEnd, 'start'));
   byId('clip_trim_end_range').addEventListener('input', event => setSelection(state.selectionStart, state.windowStart + Number(event.target.value), 'end'));
-  byId('clip_trim_start_text').addEventListener('input', event => applyTimeInput(event, 'start'));
-  byId('clip_trim_start_text').addEventListener('change', event => applyTimeInput(event, 'start', true));
-  byId('clip_trim_end_text').addEventListener('input', event => applyTimeInput(event, 'end'));
-  byId('clip_trim_end_text').addEventListener('change', event => applyTimeInput(event, 'end', true));
+  byId('clip_trim_start_text').addEventListener('change', event => applyTimeInput(event, 'start'));
+  byId('clip_trim_end_text').addEventListener('change', event => applyTimeInput(event, 'end'));
   byId('set_trim_start').addEventListener('click', () => setSelection(state.windowStart + byId('clip_trim_player').currentTime * 1000, state.selectionEnd, 'start'));
   byId('set_trim_end').addEventListener('click', () => setSelection(state.selectionStart, state.windowStart + byId('clip_trim_player').currentTime * 1000, 'end'));
   byId('preview_trim_selection').addEventListener('click', () => state.previewFrame ? (byId('clip_trim_player').pause(), stopPreview()) : previewSelection());

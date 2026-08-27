@@ -10,6 +10,7 @@ import ffmpeg
 
 from app import gif_exports
 from app.media_files import (
+    CLIP_METADATA_DIRECTORY,
     GIF_DIRECTORY,
     THUMBNAIL_DIRECTORY,
     VIDEO_DIRECTORY,
@@ -24,6 +25,7 @@ class GifExportTests(unittest.TestCase):
         VIDEO_DIRECTORY.mkdir(parents=True, exist_ok=True)
         GIF_DIRECTORY.mkdir(parents=True, exist_ok=True)
         THUMBNAIL_DIRECTORY.mkdir(parents=True, exist_ok=True)
+        CLIP_METADATA_DIRECTORY.mkdir(parents=True, exist_ok=True)
         self.clip = VIDEO_DIRECTORY / "_gif_export_test.mp4"
         self.gif = GIF_DIRECTORY / "_gif_export_test.gif"
         self.thumbnail = thumbnail_path_for_clip(self.clip)

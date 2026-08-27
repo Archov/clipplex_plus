@@ -6,7 +6,7 @@
         <meta name="viewport" content="width=device-width, initial-scale=1, shrink-to-fit=no" />
         <meta name="description" content="Create, organize, and share clips from Plex." />
         <meta name="theme-color" content="#0b0d12" />
-        <title>{{ title or 'Clipplex' }} · Clipplex</title>
+        <title>{% if title %}{{ title }} · {% endif %}Clipplex</title>
         <link rel="icon" type="image/png" href="/static/icons/clipplex_icon.png">
         <link href="/static/css/styles.css" rel="stylesheet" />
         <script src="/static/js/all.min.js" crossorigin="anonymous"></script>

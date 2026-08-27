@@ -1,4 +1,5 @@
 import time
+import ffmpeg
 from flask import render_template, redirect, request, jsonify, Response, send_file
 from app import app
 from app.forms import video as formVideo
@@ -85,6 +86,9 @@ def update_clip_metadata():
         return jsonify({"result": "success", "clip": clip})
     except MediaFileError as error:
         return jsonify({"result": "error", "message": error.message}), error.status_code
+    except (OSError, ffmpeg.Error):
+        app.logger.exception("Could not save clip metadata")
+        return jsonify({"result": "error", "message": "The clip details could not be saved."}), 500
 
 
 @app.route("/api/clips", methods=["DELETE"])
@@ -443,7 +447,7 @@ def get_instant_video(
         }, initialize=True)
         try:
             clip_library.ensure_thumbnail(clip["file_path"])
-        except MediaFileError:
+        except (MediaFileError, OSError):
             app.logger.warning("Could not create the new clip thumbnail", exc_info=True)
     except (MediaFileError, OSError):
         app.logger.warning("Could not save the new clip library metadata", exc_info=True)

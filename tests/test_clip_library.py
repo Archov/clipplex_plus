@@ -1,13 +1,15 @@
 import json
 import os
 from pathlib import Path
+import shutil
 from unittest.mock import patch
 import unittest
 import uuid
 
 from app import clip_library
 from app.media_files import (
-    VIDEO_DIRECTORY,
+    MEDIA_DIRECTORY,
+    legacy_metadata_path_for_clip,
     metadata_path_for_clip,
     public_media_path,
     thumbnail_path_for_clip,
@@ -16,8 +18,26 @@ from app.media_files import (
 
 class ClipLibraryTests(unittest.TestCase):
     def setUp(self):
-        VIDEO_DIRECTORY.mkdir(parents=True, exist_ok=True)
-        self.clip_path = VIDEO_DIRECTORY / f"library-test-{uuid.uuid4().hex}.mp4"
+        test_root = MEDIA_DIRECTORY / f"clip-library-tests-{uuid.uuid4().hex}"
+        test_root.mkdir(parents=True)
+        self.addCleanup(shutil.rmtree, test_root, True)
+        self.video_directory = test_root / "videos"
+        self.metadata_directory = test_root / "metadata"
+        self.thumbnail_directory = test_root / "thumbnails"
+        self.directory_patches = [
+            patch("app.clip_library.VIDEO_DIRECTORY", self.video_directory),
+            patch("app.clip_library.THUMBNAIL_DIRECTORY", self.thumbnail_directory),
+            patch("app.media_files.VIDEO_DIRECTORY", self.video_directory),
+            patch("app.media_files.CLIP_METADATA_DIRECTORY", self.metadata_directory),
+            patch("app.media_files.THUMBNAIL_DIRECTORY", self.thumbnail_directory),
+        ]
+        for directory_patch in self.directory_patches:
+            directory_patch.start()
+            self.addCleanup(directory_patch.stop)
+        self.video_directory.mkdir(parents=True, exist_ok=True)
+        self.metadata_directory.mkdir(parents=True, exist_ok=True)
+        self.thumbnail_directory.mkdir(parents=True, exist_ok=True)
+        self.clip_path = self.video_directory / f"library-test-{uuid.uuid4().hex}.mp4"
         self.clip_path.write_bytes(b"clip")
         self.probe = patch("app.clip_library.ffmpeg.probe", return_value={
             "format": {"duration": "12.5", "tags": {
@@ -120,7 +140,7 @@ class ClipLibraryTests(unittest.TestCase):
             clip_library.ensure_thumbnail("../secret.mp4")
 
     def test_list_is_newest_first(self):
-        older_path = VIDEO_DIRECTORY / f"library-test-{uuid.uuid4().hex}.mp4"
+        older_path = self.video_directory / f"library-test-{uuid.uuid4().hex}.mp4"
         older_path.write_bytes(b"older")
         try:
             now = self.clip_path.stat().st_mtime
@@ -132,7 +152,7 @@ class ClipLibraryTests(unittest.TestCase):
             metadata_path_for_clip(older_path).unlink(missing_ok=True)
 
     def test_clips_from_the_same_source_receive_stable_numbered_titles(self):
-        older_path = VIDEO_DIRECTORY / f"library-test-{uuid.uuid4().hex}.mp4"
+        older_path = self.video_directory / f"library-test-{uuid.uuid4().hex}.mp4"
         older_path.write_bytes(b"older")
         try:
             now = self.clip_path.stat().st_mtime
@@ -156,6 +176,62 @@ class ClipLibraryTests(unittest.TestCase):
         finally:
             older_path.unlink(missing_ok=True)
             metadata_path_for_clip(older_path).unlink(missing_ok=True)
+
+    def test_title_allocation_uses_sidecars_without_listing_or_probing(self):
+        with patch("app.clip_library.list_clips") as listing, patch("app.clip_library.ffmpeg.probe") as probe:
+            allocated = clip_library.allocate_clip_title({
+                "media_library": "TV Shows", "media_type": "episode", "title": "The Adventure",
+                "show": "Sample Show", "season_number": "1", "episode_number": "3", "year": "",
+            })
+
+        self.assertEqual(allocated["clip_number"], 1)
+        listing.assert_not_called()
+        probe.assert_not_called()
+
+    def test_title_allocation_reads_legacy_sidecars_without_migrating_them(self):
+        metadata = {
+            "media_library": "TV Shows", "media_type": "episode", "title": "The Adventure",
+            "show": "Sample Show", "season_number": "1", "episode_number": "3", "year": "",
+        }
+        legacy_path = legacy_metadata_path_for_clip(self.clip_path)
+        legacy_path.write_text(json.dumps({
+            **metadata,
+            "source_key": clip_library._source_key(metadata),
+            "clip_number": 3,
+        }), encoding="utf-8")
+
+        with patch("app.clip_library.os.replace") as replace:
+            allocated = clip_library.allocate_clip_title(metadata)
+
+        self.assertEqual(allocated["clip_number"], 4)
+        replace.assert_not_called()
+        self.assertTrue(legacy_path.is_file())
+
+    def test_initialize_reuses_a_supplied_clip_identity(self):
+        metadata = {
+            "media_library": "TV Shows", "media_type": "episode", "title": "The Adventure",
+            "show": "Sample Show", "season_number": "1", "episode_number": "3", "year": "",
+        }
+        supplied = {
+            "source_key": clip_library._source_key(metadata), "clip_number": 7,
+            "clip_title": "Supplied title - 7", "clip_title_custom": False,
+        }
+        with patch("app.clip_library.allocate_clip_title") as allocate:
+            clip = clip_library.save_clip_metadata(self.clip_path, {
+                **metadata,
+                **supplied,
+            }, initialize=True)
+
+        allocate.assert_not_called()
+        self.assertEqual(clip["source_key"], supplied["source_key"])
+        self.assertEqual(clip["clip_number"], 7)
+        self.assertEqual(clip["clip_title"], "Supplied title - 7")
+
+    def test_non_persisting_listing_never_writes_numbering_sidecars(self):
+        with patch("app.clip_library._update_sidecar") as update:
+            clip_library.list_clips(persist=False)
+
+        update.assert_not_called()
 
 
 if __name__ == "__main__":

@@ -31,16 +31,19 @@ def _utc_timestamp(timestamp: float) -> str:
     return datetime.fromtimestamp(timestamp, timezone.utc).isoformat().replace("+00:00", "Z")
 
 
-def _read_sidecar(clip_path: Path) -> dict:
+def _read_sidecar(clip_path: Path, migrate_legacy=True) -> dict:
     metadata_path = metadata_path_for_clip(clip_path)
     legacy_path = legacy_metadata_path_for_clip(clip_path)
     if not metadata_path.is_file() and legacy_path.is_file():
-        try:
-            metadata_path.parent.mkdir(parents=True, exist_ok=True)
-            os.replace(legacy_path, metadata_path)
-        except OSError:
-            if not metadata_path.is_file():
-                metadata_path = legacy_path
+        if migrate_legacy:
+            try:
+                metadata_path.parent.mkdir(parents=True, exist_ok=True)
+                os.replace(legacy_path, metadata_path)
+            except OSError:
+                if not metadata_path.is_file():
+                    metadata_path = legacy_path
+        else:
+            metadata_path = legacy_path
     try:
         payload = json.loads(metadata_path.read_text(encoding="utf-8"))
         return payload if isinstance(payload, dict) else {}
@@ -239,7 +242,7 @@ def describe_clip(file_path, probe_data=None) -> dict:
     return descriptor
 
 
-def list_clips(limit=None) -> list:
+def list_clips(limit=None, persist=True) -> list:
     clips = []
     if not VIDEO_DIRECTORY.is_dir():
         return clips
@@ -278,7 +281,7 @@ def list_clips(limit=None) -> list:
                 "clip_title_custom": clip["clip_title_custom"],
             }
             try:
-                if any(sidecar.get(key) != value for key, value in updates.items()):
+                if persist and any(sidecar.get(key) != value for key, value in updates.items()):
                     _update_sidecar(clip["file_path"], updates, clip.get("created_at"))
             except OSError:
                 pass
@@ -301,16 +304,31 @@ def _update_sidecar(file_path, updates: dict, created_at=None) -> None:
         os.replace(temporary_path, metadata_path)
 
 
+def _allocated_clip_numbers(source_key: str, excluded_path=None) -> list:
+    numbers = []
+    excluded = Path(excluded_path).resolve() if excluded_path else None
+    if not VIDEO_DIRECTORY.is_dir():
+        return numbers
+    for clip_path in VIDEO_DIRECTORY.iterdir():
+        if clip_path.suffix.lower() != ".mp4" or not clip_path.is_file() or (excluded and clip_path.resolve() == excluded):
+            continue
+        sidecar = _read_sidecar(clip_path, migrate_legacy=False)
+        stored_source_key = _clean(sidecar.get("source_key"))
+        if not stored_source_key:
+            has_source_metadata = any(_clean(sidecar.get(field)) for field in TEXT_FIELDS + ("media_type",))
+            if not has_source_metadata:
+                continue
+            stored_source_key = _source_key(sidecar)
+        number = _positive_integer(sidecar.get("clip_number"), 0)
+        if stored_source_key == source_key and number > 0:
+            numbers.append(number)
+    return numbers
+
+
 def allocate_clip_title(payload: dict, exclude_file_path=None) -> dict:
     source_key = _source_key(payload)
-    excluded = None
-    if exclude_file_path:
-        excluded = public_media_path(_resolve_clip_path(exclude_file_path))
-    numbers = [
-        _positive_integer(clip.get("clip_number"))
-        for clip in list_clips()
-        if clip.get("source_key") == source_key and clip.get("file_path") != excluded
-    ]
+    excluded = _resolve_clip_path(exclude_file_path) if exclude_file_path else None
+    numbers = _allocated_clip_numbers(source_key, excluded)
     clip_number = max(numbers, default=0) + 1
     return {
         "source_key": source_key,
@@ -356,9 +374,19 @@ def save_clip_metadata(file_path: str, payload: dict, initialize=False) -> dict:
             cleaned = {field: _clean(payload.get(field)) for field in TEXT_FIELDS + TIMELINE_FIELDS}
             media_type = _clean(payload.get("media_type")).lower()
             cleaned["media_type"] = media_type if media_type in VALID_MEDIA_TYPES else "movie"
-            identity = allocate_clip_title(cleaned, clip_path)
-            for field in ("source_key", "clip_number", "clip_title", "clip_title_custom"):
-                cleaned[field] = payload.get(field, identity[field])
+            supplied_number = _positive_integer(payload.get("clip_number"), 0)
+            supplied_source_key = _clean(payload.get("source_key"))
+            supplied_title = _clean(payload.get("clip_title"))
+            if supplied_number > 0 and supplied_source_key and supplied_title:
+                identity = {
+                    "source_key": supplied_source_key,
+                    "clip_number": supplied_number,
+                    "clip_title": supplied_title,
+                    "clip_title_custom": bool(payload.get("clip_title_custom")),
+                }
+            else:
+                identity = allocate_clip_title(cleaned, clip_path)
+            cleaned.update(identity)
             cleaned["clip_number"] = _positive_integer(cleaned["clip_number"])
             cleaned["clip_title"] = _clean(cleaned["clip_title"]) or identity["clip_title"]
             cleaned["clip_title_custom"] = bool(cleaned["clip_title_custom"])

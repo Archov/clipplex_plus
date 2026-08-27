@@ -10,6 +10,7 @@
     deletingPath: null,
     uploadingPath: null,
     deleteTimer: null,
+    searchTimer: null,
     uploaders: [],
     immichLoaded: false,
   };
@@ -135,8 +136,8 @@
     actions.className = 'clip-actions';
     actions.append(
       actionButton('Play', 'play', 'primary-action', () => openPlayer(clip)),
-      actionButton('Trim clip', 'cut', '', () => window.ClipTrimmer.open(clip, 'clip')),
-      actionButton('Extend from original', 'expand-alt', '', () => window.ClipTrimmer.open(clip, 'original')),
+      actionButton('Trim clip', 'cut', '', () => window.ClipTrimmer.open(clip, 'clip', clips)),
+      actionButton('Extend from original', 'expand-alt', '', () => window.ClipTrimmer.open(clip, 'original', clips)),
       actionButton('Edit details', 'pen', '', () => openEdit(clip)),
       actionButton('Export GIF', 'gif', '', () => exportGif(clip)),
     );
@@ -320,18 +321,21 @@
     if (state.immichLoaded) return;
     byId('library_immich_loading').classList.remove('d-none');
     byId('library_immich_fields').classList.add('d-none');
-    const response = await fetch('/api/uploaders/immich/options', {cache: 'no-store'});
-    const result = await response.json();
-    if (!response.ok) throw new Error(result.message || 'Immich options could not be loaded.');
-    const fill = (id, options) => {
-      const select = byId(id); select.replaceChildren();
-      options.forEach(item => select.add(new Option(item.name, item.id)));
-    };
-    fill('library_immich_tags', result.tags || []);
-    fill('library_immich_albums', result.albums || []);
-    state.immichLoaded = true;
-    byId('library_immich_loading').classList.add('d-none');
-    byId('library_immich_fields').classList.remove('d-none');
+    try {
+      const response = await fetch('/api/uploaders/immich/options', {cache: 'no-store'});
+      const result = await response.json();
+      if (!response.ok) throw new Error(result.message || 'Immich options could not be loaded.');
+      const fill = (id, options) => {
+        const select = byId(id); select.replaceChildren();
+        options.forEach(item => select.add(new Option(item.name, item.id)));
+      };
+      fill('library_immich_tags', result.tags || []);
+      fill('library_immich_albums', result.albums || []);
+      state.immichLoaded = true;
+      byId('library_immich_fields').classList.remove('d-none');
+    } finally {
+      byId('library_immich_loading').classList.add('d-none');
+    }
   }
 
   async function updateUploadOptions() {
@@ -431,6 +435,8 @@
   }
 
   function resetFilters() {
+    window.clearTimeout(state.searchTimer);
+    state.searchTimer = null;
     Object.values(filters).forEach(control => { control.value = ''; });
     render();
     filters.search.focus();
@@ -443,7 +449,13 @@
     } finally { render(); }
   }
 
-  filters.search.addEventListener('input', render);
+  filters.search.addEventListener('input', () => {
+    window.clearTimeout(state.searchTimer);
+    state.searchTimer = window.setTimeout(() => {
+      state.searchTimer = null;
+      render();
+    }, 150);
+  });
   [filters.library, filters.type, filters.title, filters.episode].forEach(control => control.addEventListener('change', render));
   byId('reset_filters').addEventListener('click', resetFilters);
   document.querySelectorAll('[data-reset-filters]').forEach(button => button.addEventListener('click', resetFilters));
