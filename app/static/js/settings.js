@@ -167,10 +167,17 @@
       wrapper.append(control);
     }
 
-    const help = document.createElement('div');
-    help.className = 'form-text';
-    help.textContent = field.help;
-    wrapper.append(help);
+    if (field.help) {
+      label.classList.add('setting-help');
+
+      label.setAttribute('data-bs-toggle', 'tooltip');
+      label.setAttribute('data-bs-placement', 'right');
+      label.setAttribute('title', field.help);
+
+      if (window.bootstrap?.Tooltip) {
+        new window.bootstrap.Tooltip(label);
+      }
+    }
     if (field.environment_managed) {
       const managed = document.createElement('div');
       managed.className = 'form-text text-warning';
@@ -188,7 +195,7 @@
       const clearLabel = document.createElement('label');
       clearLabel.className = 'form-check-label';
       clearLabel.htmlFor = clear.id;
-      clearLabel.textContent = `Clear saved ${field.label.toLowerCase()}`;
+      clearLabel.textContent = `Clear saved ${field.label}`;
       clearWrap.append(clear, clearLabel);
       wrapper.append(clearWrap);
     }
@@ -207,15 +214,32 @@
     heading.textContent = section.label;
     body.append(heading);
     let activeGroup = null;
+    let groupContainer = null;
+
     for (const field of fields) {
-      if (field.group && field.group !== activeGroup) {
-        const groupHeading = document.createElement('h3');
-        groupHeading.className = 'h6 mt-4 mb-3';
-        groupHeading.textContent = field.group;
-        body.append(groupHeading);
-        activeGroup = field.group;
+      if (field.group !== activeGroup) {
+        activeGroup = field.group || null;
+        groupContainer = null;
+
+        if (activeGroup) {
+          const groupHeading = document.createElement('h3');
+          groupHeading.className = 'h6 mt-4 mb-3';
+          groupHeading.textContent = activeGroup;
+          body.append(groupHeading);
+
+          groupContainer = document.createElement('div');
+          groupContainer.className = 'ms-3';
+          body.append(groupContainer);
+        }
       }
-      body.append(fieldNode(field));
+
+      const node = fieldNode(field);
+
+      if (groupContainer) {
+        groupContainer.append(node);
+      } else {
+        body.append(node);
+      }
     }
     if (['plex', 'streamable', 'immich'].includes(section.id)) {
       const testButton = document.createElement('button');
@@ -245,14 +269,29 @@
   function render(model) {
     settingsModel = model;
     sectionsRoot.replaceChildren();
+
     for (const section of model.sections) {
-      const fields = model.fields.filter(field => field.section === section.id);
-      if (fields.length) sectionsRoot.append(sectionNode(section, fields));
+      const fields = model.fields.filter(
+        field => field.section === section.id
+      );
+
+      if (fields.length) {
+        sectionsRoot.append(sectionNode(section, fields));
+      }
     }
+    const titleToggle = document.querySelector(
+      '[data-setting-key="immich_auto_tag_title"]'
+    );
+
+    if (titleToggle) {
+      titleToggle.addEventListener('change', syncAutoTagDependencies);
+    }
+
+    syncAutoTagDependencies();
   }
 
   async function load() {
-    const response = await fetch('/api/settings', {cache: 'no-store'});
+    const response = await fetch('/api/settings', { cache: 'no-store' });
     const payload = await response.json();
     if (!response.ok) throw new Error(payload.message || 'Could not load settings.');
     render(payload);
@@ -264,7 +303,7 @@
     button.textContent = 'Testing…';
     try {
       const response = await fetch('/api/settings/tests', {
-        method: 'POST', headers: {'Content-Type': 'application/json'}, body: JSON.stringify({service}),
+        method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ service }),
       });
       const payload = await response.json();
       showTestResult(button, payload.message || 'Connection test complete.', response.ok);
@@ -276,12 +315,12 @@
   async function queueMissingImmichUploads(button) {
     button.disabled = true;
     try {
-      const response = await fetch('/api/immich/uploads/missing', {method: 'POST'});
+      const response = await fetch('/api/immich/uploads/missing', { method: 'POST' });
       const payload = await response.json();
       if (!response.ok) throw new Error(payload.message || 'Could not queue Immich uploads.');
       showNotice('Missing clips are queued for Immich upload.', 'info');
       while (true) {
-        const statusResponse = await fetch(payload.status_url || `/api/jobs/${encodeURIComponent(payload.job_id)}`, {cache: 'no-store'});
+        const statusResponse = await fetch(payload.status_url || `/api/jobs/${encodeURIComponent(payload.job_id)}`, { cache: 'no-store' });
         const job = await statusResponse.json();
         if (!statusResponse.ok) throw new Error(job.message || 'Could not read Immich upload progress.');
         if (job.status === 'queued' || job.status === 'running') {
@@ -322,7 +361,7 @@
     saveButton.disabled = true;
     try {
       const response = await fetch('/api/settings', {
-        method: 'PATCH', headers: {'Content-Type': 'application/json'}, body: JSON.stringify({values, clear}),
+        method: 'PATCH', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ values, clear }),
       });
       const payload = await response.json();
       if (!response.ok) throw new Error(payload.message || 'Settings could not be saved.');
@@ -334,6 +373,32 @@
       saveButton.disabled = false;
     }
   });
+
+  function syncAutoTagDependencies() {
+    const titleToggle = document.querySelector(
+      '[data-setting-key="immich_auto_tag_title"]'
+    );
+
+    const episodeToggle = document.querySelector(
+      '[data-setting-key="immich_auto_tag_episode"]'
+    );
+
+    if (!titleToggle || !episodeToggle) return;
+
+    const disabled = !titleToggle.checked;
+
+    if (disabled) {
+      episodeToggle.checked = false;
+    }
+
+    episodeToggle.disabled = disabled;
+    episodeToggle.dataset.dependencyDisabled = String(disabled);
+
+    const row = episodeToggle.closest('.form-check');
+    if (row) {
+      row.classList.toggle('opacity-50', disabled);
+    }
+  }
 
   load().catch(error => showNotice(error.message, 'danger'));
 })();

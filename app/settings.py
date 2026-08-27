@@ -65,6 +65,7 @@ SETTING_DEFINITIONS = {
         "permissions": [
             "asset.upload",
             "asset.update",
+            "asset.delete (only if 'Manage Immich clips after upload' is enabled)",
             "tag.read",
             "tag.create",
             "tag.asset",
@@ -120,7 +121,7 @@ SETTING_DEFINITIONS = {
         "secret": False,
         "section": "immich",
         "group": "Auto-Tag:",
-        "label": "Episode Name",
+        "label": "Episode Title (S##E##)",
         "help": "Use S##E## as an automatic tag for episodes.",
         "kind": "checkbox",
     },
