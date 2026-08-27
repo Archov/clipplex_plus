@@ -4,6 +4,7 @@ from unittest.mock import patch
 import os
 from pathlib import Path
 import shutil
+import sqlite3
 import ffmpeg
 
 from app import app
@@ -221,6 +222,13 @@ class CreateVideoRouteTests(unittest.TestCase):
 
         self.assertEqual(response.status_code, 400)
         self.assertIn("Unsupported", response.get_json()["message"])
+
+    @patch("app.routes.clip_library.list_clips", side_effect=sqlite3.OperationalError("locked"))
+    def test_clips_api_returns_json_for_database_failures(self, _clips):
+        response = self.client.get("/api/clips")
+
+        self.assertEqual(response.status_code, 500)
+        self.assertEqual(response.get_json()["message"], "The clip library could not be loaded.")
 
     @patch("app.routes.clip_library.save_clip_metadata")
     def test_clip_metadata_patch_returns_updated_clip(self, save):

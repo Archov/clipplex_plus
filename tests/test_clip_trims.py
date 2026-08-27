@@ -201,7 +201,7 @@ class SyntheticClipTrimTests(unittest.TestCase):
         clip = clip_library.describe_clip(self.clip_path)
         source_numbers = [
             int(item.get("clip_number") or 0)
-            for item in clip_library.list_clips(persist=False)
+            for item in clip_library.list_clips()
             if item.get("source_key") == clip["source_key"]
         ]
         expected_number = max(source_numbers, default=0) + 1

@@ -1,3 +1,4 @@
+import sqlite3
 import time
 import ffmpeg
 from flask import render_template, redirect, request, jsonify, Response, send_file
@@ -77,6 +78,9 @@ def created_clips():
         return jsonify({"clips": clip_library.list_clips(sort=request.args.get("sort", "newest"))})
     except MediaFileError as error:
         return jsonify({"message": error.message}), error.status_code
+    except (OSError, ffmpeg.Error, sqlite3.Error):
+        app.logger.exception("Could not list clips")
+        return jsonify({"message": "The clip library could not be loaded."}), 500
 
 
 @app.route("/api/clips/metadata", methods=["PATCH"])
@@ -89,7 +93,7 @@ def update_clip_metadata():
         return jsonify({"result": "success", "clip": clip})
     except MediaFileError as error:
         return jsonify({"result": "error", "message": error.message}), error.status_code
-    except (OSError, ffmpeg.Error):
+    except (OSError, ffmpeg.Error, sqlite3.Error):
         app.logger.exception("Could not save clip metadata")
         return jsonify({"result": "error", "message": "The clip details could not be saved."}), 500
 

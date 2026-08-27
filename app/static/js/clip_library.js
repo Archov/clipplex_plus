@@ -3,6 +3,7 @@
 
   const dataNode = document.getElementById('clip_library_data');
   let clips = JSON.parse(dataNode ? dataNode.textContent : '[]');
+  let refreshRequest = 0;
   const validSorts = ['newest', 'oldest', 'title_asc', 'title_desc', 'duration_asc', 'duration_desc'];
   const storedSort = localStorage.getItem('clipplex.librarySort');
   const state = {
@@ -210,8 +211,11 @@
   }
 
   async function refreshClips() {
-    const response = await fetch(`/api/clips?sort=${encodeURIComponent(state.sort)}`, {cache: 'no-store'});
+    const request = ++refreshRequest;
+    const sort = state.sort;
+    const response = await fetch(`/api/clips?sort=${encodeURIComponent(sort)}`, {cache: 'no-store'});
     const result = await response.json();
+    if (request !== refreshRequest) return;
     if (!response.ok) throw new Error(result.message || 'The clip library could not be refreshed.');
     clips = result.clips || [];
     render();
@@ -271,9 +275,10 @@
       const response = await fetch('/api/clips/metadata', {method: 'PATCH', headers: {'Content-Type': 'application/json'}, body: JSON.stringify(payload)});
       const result = await response.json();
       if (!response.ok) throw new Error(result.message || 'Clip details could not be saved.');
-      await refreshClips();
       bootstrap.Modal.getInstance(byId('edit_clip_modal')).hide();
       notice('Clip details saved.');
+      try { await refreshClips(); }
+      catch (error) { notice(`Clip details were saved, but the library could not refresh: ${error.message}`, 'warning'); }
     } catch (error) {
       byId('edit_clip_error').textContent = error.message;
       byId('edit_clip_error').classList.remove('d-none');
@@ -309,10 +314,11 @@
       const response = await fetch('/api/clips', {method: 'DELETE', headers: {'Content-Type': 'application/json'}, body: JSON.stringify({file_path: path})});
       const result = await response.json();
       if (!response.ok) throw new Error(result.message || 'The clip could not be deleted.');
-      await refreshClips();
       state.deletingPath = null;
       bootstrap.Modal.getInstance(byId('delete_clip_modal')).hide();
       notice('Clip deleted.');
+      try { await refreshClips(); }
+      catch (error) { notice(`The clip was deleted, but the library could not refresh: ${error.message}`, 'warning'); }
     } catch (error) {
       byId('delete_clip_error').textContent = error.message;
       byId('delete_clip_error').classList.remove('d-none');
@@ -487,9 +493,9 @@
   document.addEventListener('clipplex:clip-saved', async event => {
     const result = event.detail || {};
     if (!result.clip) return;
-    try { await refreshClips(); }
-    catch (error) { notice(error.message, 'danger'); return; }
     notice(result.operation === 'replace' ? 'Clip replaced.' : 'Trimmed copy saved.');
+    try { await refreshClips(); }
+    catch (error) { notice(`The clip was saved, but the library could not refresh: ${error.message}`, 'warning'); }
   });
 
   render();

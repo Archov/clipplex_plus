@@ -12,6 +12,7 @@ import ffmpeg
 from app import clip_library
 from app.media_files import (
     MEDIA_DIRECTORY,
+    MediaFileError,
     legacy_metadata_path_for_clip,
     metadata_path_for_clip,
     public_media_path,
@@ -233,12 +234,6 @@ class ClipLibraryTests(unittest.TestCase):
         self.assertEqual(clip["clip_number"], 7)
         self.assertEqual(clip["clip_title"], "Supplied title - 7")
 
-    def test_non_persisting_listing_never_writes_numbering_sidecars(self):
-        with patch("app.clip_library._update_sidecar") as update:
-            clip_library.list_clips(persist=False)
-
-        update.assert_not_called()
-
     def test_analysis_is_cached_until_the_file_fingerprint_changes(self):
         clip_library.describe_clip(self.clip_path)
         self.probe.stop()
@@ -287,6 +282,57 @@ class ClipLibraryTests(unittest.TestCase):
         self.assertEqual(repaired["title"], "Repaired")
         self.assertEqual(repaired["media_library"], "Recovered")
         self.assertFalse(sidecar.exists())
+
+    def test_malformed_source_numbers_are_normalized_during_import(self):
+        source = {
+            "media_path": "/media/source.mkv",
+            "duration_ms": "not-a-number",
+            "video_stream_index": "invalid",
+            "fingerprint": {"size": "bad", "mtime_ns": -1},
+            "audio_track": {"index": "bad", "subtitle_index": "also-bad"},
+        }
+
+        clip_library.save_clip_metadata(self.clip_path, {
+            "media_library": "TV Shows", "media_type": "episode", "title": "The Adventure",
+            "show": "Sample Show", "season_number": "1", "episode_number": "3", "source": source,
+        }, initialize=True)
+
+        stored = clip_library._read_sidecar(self.clip_path)["source"]
+        self.assertEqual(stored["duration_ms"], 0)
+        self.assertEqual(stored["video_stream_index"], 0)
+        self.assertEqual(stored["fingerprint"], {"size": 0, "mtime_ns": 0})
+        self.assertIsNone(stored["audio_track"]["index"])
+
+    def test_mutations_return_not_found_if_the_database_row_disappears(self):
+        operations = (
+            lambda: clip_library._update_sidecar(self.clip_path, {"title": "Changed"}),
+            lambda: clip_library.save_clip_metadata(self.clip_path, {
+                "media_library": "Movies", "media_type": "movie", "title": "Changed",
+                "show": "", "season_number": "", "episode_number": "", "year": "",
+            }),
+        )
+        for operation in operations:
+            with self.subTest(operation=operation), patch("app.clip_library._row_for_path", return_value=None):
+                with self.assertRaises(MediaFileError) as raised:
+                    operation()
+                self.assertEqual(raised.exception.status_code, 404)
+
+    def test_sync_removes_every_stale_database_row(self):
+        clip_library.describe_clip(self.clip_path)
+        with clip_library.database.transaction(immediate=True) as connection:
+            connection.executemany(
+                "INSERT INTO clips (file_path, source_key, created_at) VALUES (?, ?, ?)",
+                (
+                    ("static/media/videos/missing-one.mp4", "missing-one", "2024-01-01T00:00:00Z"),
+                    ("static/media/videos/missing-two.mp4", "missing-two", "2024-01-01T00:00:00Z"),
+                ),
+            )
+
+        clip_library.sync_library()
+
+        with clip_library.database.open_connection() as connection:
+            paths = {row["file_path"] for row in connection.execute("SELECT file_path FROM clips")}
+        self.assertEqual(paths, {public_media_path(self.clip_path)})
 
     def test_sidecar_is_not_deleted_when_database_import_fails(self):
         sidecar = metadata_path_for_clip(self.clip_path)

@@ -22,14 +22,58 @@ TEXT_FIELDS = ("media_library", "title", "show", "season_number", "episode_numbe
 TIMELINE_FIELDS = ("original_start_time", "original_end_time")
 VALID_MEDIA_TYPES = {"movie", "episode"}
 MAX_TEXT_LENGTH = 255
-SORT_ORDERS = {
-    "newest": "created_at DESC, file_path ASC",
-    "oldest": "created_at ASC, file_path ASC",
-    "title_asc": "clip_title COLLATE NOCASE ASC, created_at DESC",
-    "title_desc": "clip_title COLLATE NOCASE DESC, created_at DESC",
-    "duration_asc": "duration_ms ASC, created_at DESC",
-    "duration_desc": "duration_ms DESC, created_at DESC",
+SORT_QUERIES = {
+    "newest": "SELECT * FROM clips ORDER BY created_at DESC, file_path ASC",
+    "oldest": "SELECT * FROM clips ORDER BY created_at ASC, file_path ASC",
+    "title_asc": "SELECT * FROM clips ORDER BY clip_title COLLATE NOCASE ASC, created_at DESC",
+    "title_desc": "SELECT * FROM clips ORDER BY clip_title COLLATE NOCASE DESC, created_at DESC",
+    "duration_asc": "SELECT * FROM clips ORDER BY duration_ms ASC, created_at DESC",
+    "duration_desc": "SELECT * FROM clips ORDER BY duration_ms DESC, created_at DESC",
 }
+SORT_LIMIT_QUERIES = {
+    "newest": "SELECT * FROM clips ORDER BY created_at DESC, file_path ASC LIMIT ?",
+    "oldest": "SELECT * FROM clips ORDER BY created_at ASC, file_path ASC LIMIT ?",
+    "title_asc": "SELECT * FROM clips ORDER BY clip_title COLLATE NOCASE ASC, created_at DESC LIMIT ?",
+    "title_desc": "SELECT * FROM clips ORDER BY clip_title COLLATE NOCASE DESC, created_at DESC LIMIT ?",
+    "duration_asc": "SELECT * FROM clips ORDER BY duration_ms ASC, created_at DESC LIMIT ?",
+    "duration_desc": "SELECT * FROM clips ORDER BY duration_ms DESC, created_at DESC LIMIT ?",
+}
+SORT_ORDERS = frozenset(SORT_QUERIES)
+_CLIP_UPDATE_FIELDS = (
+    "file_size", "file_mtime_ns", "revision", "analysis_status", "analysis_error", "duration_ms",
+    "media_library", "media_type", "title", "show", "season_number", "episode_number", "year",
+    "username", "original_start_time", "original_end_time", "source_key", "clip_number", "clip_title",
+    "clip_title_custom", "created_at", "legacy_import_pending",
+)
+_CLIP_UPDATE_SQL = """
+    UPDATE clips SET
+        file_size = COALESCE(:file_size, file_size),
+        file_mtime_ns = COALESCE(:file_mtime_ns, file_mtime_ns),
+        revision = COALESCE(:revision, revision),
+        analysis_status = COALESCE(:analysis_status, analysis_status),
+        analysis_error = COALESCE(:analysis_error, analysis_error),
+        duration_ms = COALESCE(:duration_ms, duration_ms),
+        media_library = COALESCE(:media_library, media_library),
+        media_type = COALESCE(:media_type, media_type),
+        title = COALESCE(:title, title),
+        show = COALESCE(:show, show),
+        season_number = COALESCE(:season_number, season_number),
+        episode_number = COALESCE(:episode_number, episode_number),
+        year = COALESCE(:year, year),
+        username = COALESCE(:username, username),
+        original_start_time = COALESCE(:original_start_time, original_start_time),
+        original_end_time = COALESCE(:original_end_time, original_end_time),
+        source_key = COALESCE(:source_key, source_key),
+        clip_number = COALESCE(:clip_number, clip_number),
+        clip_title = COALESCE(:clip_title, clip_title),
+        clip_title_custom = COALESCE(:clip_title_custom, clip_title_custom),
+        created_at = COALESCE(:created_at, created_at),
+        legacy_import_pending = CASE WHEN :clear_legacy_pending THEN 0
+            ELSE COALESCE(:legacy_import_pending, legacy_import_pending) END,
+        analyzed_at = CASE WHEN :mark_analyzed THEN CURRENT_TIMESTAMP ELSE analyzed_at END,
+        updated_at = CURRENT_TIMESTAMP
+    WHERE id = :clip_id
+"""
 
 
 def _utc_timestamp(timestamp: float) -> str:
@@ -62,6 +106,23 @@ def _positive_integer(value, default=1) -> int:
     except (TypeError, ValueError):
         return default
     return number if number > 0 else default
+
+
+def _nonnegative_integer(value, default=0) -> int:
+    try:
+        number = int(value)
+    except (TypeError, ValueError):
+        return default
+    return number if number >= 0 else default
+
+
+def _optional_integer(value):
+    if value is None or value == "":
+        return None
+    try:
+        return int(value)
+    except (TypeError, ValueError):
+        return None
 
 
 def _source_key(details: dict) -> str:
@@ -143,19 +204,45 @@ def _legacy_payload(clip_path: Path):
 
 
 def _next_clip_number(connection, source_key: str, excluded_id=None) -> int:
-    query, parameters = "SELECT COALESCE(MAX(clip_number), 0) FROM clips WHERE source_key = ?", [source_key]
-    if excluded_id is not None:
-        query += " AND id != ?"
-        parameters.append(excluded_id)
-    return int(connection.execute(query, parameters).fetchone()[0]) + 1
+    if excluded_id is None:
+        row = connection.execute(
+            "SELECT COALESCE(MAX(clip_number), 0) FROM clips WHERE source_key = ?",
+            (source_key,),
+        ).fetchone()
+    else:
+        row = connection.execute(
+            "SELECT COALESCE(MAX(clip_number), 0) FROM clips WHERE source_key = ? AND id != ?",
+            (source_key, excluded_id),
+        ).fetchone()
+    return int(row[0]) + 1
 
 
 def _number_is_available(connection, source_key: str, number: int, excluded_id=None) -> bool:
-    query, parameters = "SELECT 1 FROM clips WHERE source_key = ? AND clip_number = ?", [source_key, number]
-    if excluded_id is not None:
-        query += " AND id != ?"
-        parameters.append(excluded_id)
-    return connection.execute(query, parameters).fetchone() is None
+    if excluded_id is None:
+        row = connection.execute(
+            "SELECT 1 FROM clips WHERE source_key = ? AND clip_number = ?",
+            (source_key, number),
+        ).fetchone()
+    else:
+        row = connection.execute(
+            "SELECT 1 FROM clips WHERE source_key = ? AND clip_number = ? AND id != ?",
+            (source_key, number, excluded_id),
+        ).fetchone()
+    return row is None
+
+
+def _update_clip(connection, clip_id: int, values: dict, analyzed=False, clear_legacy_pending=False) -> None:
+    unknown_columns = values.keys() - set(_CLIP_UPDATE_FIELDS)
+    if unknown_columns:
+        raise ValueError(f"Unsupported clip columns: {', '.join(sorted(unknown_columns))}")
+    parameters = {field: None for field in _CLIP_UPDATE_FIELDS}
+    parameters.update(values)
+    parameters.update({
+        "clip_id": clip_id,
+        "mark_analyzed": int(analyzed),
+        "clear_legacy_pending": int(clear_legacy_pending),
+    })
+    connection.execute(_CLIP_UPDATE_SQL, parameters)
 
 
 def _save_source(connection, clip_id: int, source) -> None:
@@ -168,8 +255,8 @@ def _save_source(connection, clip_id: int, source) -> None:
         "INSERT INTO clip_sources (clip_id, version, rating_key, media_key, part_id, media_path, duration_ms, file_size, file_mtime_ns, video_stream_index) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
         (clip_id, _positive_integer(source.get("version")), _clean(source.get("rating_key")),
          _clean(source.get("media_key")), _clean(source.get("part_id")), _clean(source.get("media_path")),
-         max(0, int(source.get("duration_ms") or 0)), max(0, int(fingerprint.get("size") or 0)),
-         max(0, int(fingerprint.get("mtime_ns") or 0)), int(source.get("video_stream_index") or 0)),
+         _nonnegative_integer(source.get("duration_ms")), _nonnegative_integer(fingerprint.get("size")),
+         _nonnegative_integer(fingerprint.get("mtime_ns")), _nonnegative_integer(source.get("video_stream_index"))),
     )
     for kind, key in (("audio", "audio_track"), ("subtitle", "subtitle_track")):
         track = source.get(key)
@@ -177,10 +264,10 @@ def _save_source(connection, clip_id: int, source) -> None:
             continue
         connection.execute(
             "INSERT INTO clip_source_tracks (clip_id, track_kind, track_id, stream_index, track_type, codec, language, title, plex_key, selected, available, unavailable_reason, subtitle_index, probe_codec) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
-            (clip_id, kind, _clean(track.get("id")), track.get("index"), _clean(track.get("track_type")),
+            (clip_id, kind, _clean(track.get("id")), _optional_integer(track.get("index")), _clean(track.get("track_type")),
              _clean(track.get("codec")), _clean(track.get("language")), _clean(track.get("title")),
              _clean(track.get("key")), int(bool(track.get("selected"))), int(track.get("available", True) is not False),
-             _clean(track.get("unavailable_reason")), track.get("subtitle_index"), _clean(track.get("probe_codec"))),
+             _clean(track.get("unavailable_reason")), _optional_integer(track.get("subtitle_index")), _clean(track.get("probe_codec"))),
         )
 
 
@@ -314,9 +401,7 @@ def _sync_clip(clip_path: Path) -> None:
                 if sidecar is not None:
                     unlink_after_commit = sidecar_path
                 if updates:
-                    assignments = ", ".join(f"{key} = ?" for key in updates)
-                    connection.execute(f"UPDATE clips SET {assignments}, analyzed_at = CURRENT_TIMESTAMP, updated_at = CURRENT_TIMESTAMP WHERE id = ?",
-                                       [*updates.values(), row["id"]])
+                    _update_clip(connection, row["id"], updates, analyzed=True)
         if unlink_after_commit is not None:
             try:
                 unlink_after_commit.unlink(missing_ok=True)
@@ -326,10 +411,15 @@ def _sync_clip(clip_path: Path) -> None:
 
 def sync_library() -> None:
     database.initialize_database()
-    paths = sorted(
-        (path for path in VIDEO_DIRECTORY.iterdir() if path.is_file() and path.suffix.lower() == ".mp4"),
-        key=lambda path: (path.stat().st_mtime_ns, path.name.casefold()),
-    ) if VIDEO_DIRECTORY.is_dir() else []
+    discovered = []
+    if VIDEO_DIRECTORY.is_dir():
+        for path in VIDEO_DIRECTORY.iterdir():
+            try:
+                if path.is_file() and path.suffix.lower() == ".mp4":
+                    discovered.append((path.stat().st_mtime_ns, path.name.casefold(), path))
+            except OSError:
+                LOGGER.warning("Clip disappeared while scanning %s", path)
+    paths = [item[2] for item in sorted(discovered)]
     present = set()
     for clip_path in paths:
         present.add(public_media_path(clip_path))
@@ -338,9 +428,9 @@ def sync_library() -> None:
         except (OSError, ffmpeg.Error, ValueError):
             LOGGER.warning("Could not synchronize clip %s", clip_path, exc_info=True)
     with database.transaction(immediate=True) as connection:
-        for row in connection.execute("SELECT file_path FROM clips"):
-            if row["file_path"] not in present:
-                connection.execute("DELETE FROM clips WHERE file_path = ?", (row["file_path"],))
+        stale = [row["file_path"] for row in connection.execute("SELECT file_path FROM clips").fetchall()
+                 if row["file_path"] not in present]
+        connection.executemany("DELETE FROM clips WHERE file_path = ?", ((path,) for path in stale))
 
 
 def _row_for_path(clip_path: Path):
@@ -378,16 +468,16 @@ def describe_clip(file_path, probe_data=None) -> dict:
     return _descriptor(row)
 
 
-def list_clips(limit=None, persist=True, sort="newest") -> list:
+def list_clips(limit=None, sort="newest") -> list:
     if sort not in SORT_ORDERS:
         raise MediaFileError("Unsupported clip sort order.")
     sync_library()
-    query, parameters = f"SELECT * FROM clips ORDER BY {SORT_ORDERS[sort]}", []
-    if limit is not None:
-        query += " LIMIT ?"
-        parameters.append(max(0, int(limit)))
     with database.open_connection() as connection:
-        return [_descriptor(row) for row in connection.execute(query, parameters)]
+        if limit is None:
+            rows = connection.execute(SORT_QUERIES[sort])
+        else:
+            rows = connection.execute(SORT_LIMIT_QUERIES[sort], (max(0, int(limit)),))
+        return [_descriptor(row) for row in rows]
 
 
 def _read_sidecar(clip_path: Path, migrate_legacy=True) -> dict:
@@ -401,12 +491,13 @@ def _read_sidecar(clip_path: Path, migrate_legacy=True) -> dict:
 def _update_sidecar(file_path, updates: dict, created_at=None) -> None:
     clip_path = _resolve_clip_path(file_path)
     row = _row_for_path(clip_path)
+    if row is None:
+        raise MediaFileError("The selected generated clip no longer exists.", 404)
     allowed = set(TEXT_FIELDS + TIMELINE_FIELDS + ("media_type", "username", "source_key", "clip_number", "clip_title", "clip_title_custom", "created_at"))
     scalars = {key: value for key, value in updates.items() if key in allowed}
     with database.transaction(immediate=True) as connection:
         if scalars:
-            assignments = ", ".join(f"{key} = ?" for key in scalars)
-            connection.execute(f"UPDATE clips SET {assignments}, updated_at = CURRENT_TIMESTAMP WHERE id = ?", [*scalars.values(), row["id"]])
+            _update_clip(connection, row["id"], scalars)
         if "source" in updates:
             _save_source(connection, row["id"], updates.get("source"))
 
@@ -464,6 +555,8 @@ def _validated_metadata(payload: dict) -> dict:
 def save_clip_metadata(file_path: str, payload: dict, initialize=False) -> dict:
     clip_path = _resolve_clip_path(file_path)
     row = _row_for_path(clip_path)
+    if row is None:
+        raise MediaFileError("The selected generated clip no longer exists.", 404)
     with lock_for_clip(clip_path), database.transaction(immediate=True) as connection:
         current = _metadata_from_row(connection, row)
         if initialize:
@@ -502,8 +595,7 @@ def save_clip_metadata(file_path: str, payload: dict, initialize=False) -> dict:
         values.update({"source_key": source_key, "clip_number": number, "clip_title": title, "clip_title_custom": int(custom)})
         if _clean(payload.get("created_at")):
             values["created_at"] = _clean(payload.get("created_at"))
-        assignments = ", ".join(f"{key} = ?" for key in values)
-        connection.execute(f"UPDATE clips SET {assignments}, updated_at = CURRENT_TIMESTAMP, legacy_import_pending = 0 WHERE id = ?", [*values.values(), row["id"]])
+        _update_clip(connection, row["id"], values, clear_legacy_pending=True)
         if initialize and isinstance(payload.get("source"), dict):
             _save_source(connection, row["id"], payload["source"])
     return describe_clip(clip_path)
