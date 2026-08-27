@@ -341,6 +341,35 @@ class CreateVideoRouteTests(unittest.TestCase):
         self.assertIs(saved_fields["original_end_time"], video.return_value.metadata_end_time)
         thumbnail.assert_called_once_with("static/media/videos/clip.mp4")
 
+    @patch("app.routes.clipplexAPI.Utils.get_video_in_folder", return_value={"file_path": "static/media/videos/fallback.mp4"})
+    @patch("app.routes.clip_trims.build_source_provenance", return_value={"version": 1})
+    @patch("app.routes.clip_library.allocate_clip_title", return_value={
+        "source_key": "movie", "clip_number": 1,
+        "clip_title": "Movie", "clip_title_custom": False,
+    })
+    @patch("app.routes.clip_library.save_clip_metadata", side_effect=ffmpeg.Error("ffprobe", b"", b"failed"))
+    @patch("app.routes.clipplexAPI.Video")
+    @patch("app.routes.clipplexAPI.PlexInfo")
+    def test_clip_creation_uses_fallback_when_metadata_probe_fails(
+        self, plex_info, video, save_metadata, allocate_title, source_provenance, get_fallback,
+    ):
+        plex_info.return_value = SimpleNamespace(
+            media_identity="1", session_identifier="session-1", duration_ms=60000,
+            username="alice", media_title="Movie", media_path="/media/movie.mkv",
+            resolve_tracks=lambda audio, subtitle: (
+                clipplexAPI.MediaTrack("audio", 1, "audio"), None
+            ),
+        )
+
+        result = __import__("app.routes", fromlist=["get_instant_video"]).get_instant_video(
+            session_id="session-1", start_ms=10000, end_ms=12000,
+            expected_media_identity="1", expected_session_id="session-1",
+        )
+
+        self.assertEqual(result["result"], "success")
+        self.assertEqual(result["clip"], {"file_path": "static/media/videos/fallback.mp4"})
+        get_fallback.assert_called_once_with(video.return_value.output_path)
+
     @patch("app.routes.get_instant_video")
     def test_queued_track_recovery_preserves_original_payload(self, create):
         import app.routes as routes

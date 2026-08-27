@@ -449,7 +449,7 @@ def get_instant_video(
             clip_library.ensure_thumbnail(clip["file_path"])
         except (MediaFileError, OSError):
             app.logger.warning("Could not create the new clip thumbnail", exc_info=True)
-    except (MediaFileError, OSError):
+    except (MediaFileError, OSError, ffmpeg.Error):
         app.logger.warning("Could not save the new clip library metadata", exc_info=True)
         clip = clipplexAPI.Utils.get_video_in_folder(video.output_path)
     request_elapsed = time.monotonic() - request_started_at

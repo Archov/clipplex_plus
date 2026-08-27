@@ -112,45 +112,25 @@ if (-not (Test-Path $Python)) {
         throw "Failed to create Python virtual environment."
     }
 
-    Write-Host "Installing Clipplex dependencies..."
-
     & $Python -m pip install --upgrade pip
 
     if ($LASTEXITCODE -ne 0) {
         throw "Failed to upgrade pip."
     }
 
-    & $Python -m pip install -r requirements.txt
-
-    if ($LASTEXITCODE -ne 0) {
-        throw "Failed to install Clipplex dependencies."
-    }
 }
 
-# Make sure Waitress is actually installed in this venv
+Write-Host "Installing Clipplex dependencies..."
+& $Python -m pip install -r requirements.txt
+
+if ($LASTEXITCODE -ne 0) {
+    throw "Failed to install Clipplex dependencies."
+}
+
 & $Python -c "import waitress" 2>$null
 
 if ($LASTEXITCODE -ne 0) {
-    Write-Host "Dependencies missing from existing virtual environment."
-    Write-Host "Installing Clipplex dependencies..."
-
-    & $Python -m pip install -r requirements.txt
-
-    if ($LASTEXITCODE -ne 0) {
-        throw "Failed to install Clipplex dependencies."
-    }
-}
-
-# Verify dependencies are installed
-& $Python -c "import waitress" 2>$null
-
-if ($LASTEXITCODE -ne 0) {
-    Write-Host "Installing Python dependencies..."
-    & $Python -m pip install -r requirements.txt
-
-    if ($LASTEXITCODE -ne 0) {
-        throw "Failed to install Python dependencies."
-    }
+    throw "Waitress is not available after dependency installation."
 }
 
 # ============================================================
