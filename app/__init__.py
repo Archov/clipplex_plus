@@ -8,7 +8,6 @@ folders = [
     os.path.join(media_folder, "gifs"),
     os.path.join(media_folder, "thumbnails"),
     os.path.join(media_folder, "previews"),
-    os.path.join(media_folder, ".clipplex", "metadata"),
     os.path.join(media_folder, ".clipplex", "work"),
 ]
 for folder in folders:
@@ -23,9 +22,9 @@ app.config["SECRET_KEY"] = settings.get("flask_secret_key")
 
 
 @app.before_request
-def block_private_media_metadata():
+def block_private_media():
     path = request.path.lower()
-    if path.startswith("/static/media/.clipplex/") or path.endswith(".clipplex.json"):
+    if path.startswith("/static/media/.clipplex/"):
         abort(404)
 
 

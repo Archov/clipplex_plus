@@ -11,9 +11,8 @@ import ffmpeg
 
 from app import database
 from app.media_files import (
-    MediaFileError, THUMBNAIL_DIRECTORY, VIDEO_DIRECTORY, legacy_metadata_path_for_clip,
-    lock_for_clip, metadata_path_for_clip, public_media_path, resolve_generated_clip,
-    thumbnail_path_for_clip,
+    MediaFileError, THUMBNAIL_DIRECTORY, VIDEO_DIRECTORY, lock_for_clip,
+    public_media_path, resolve_generated_clip, thumbnail_path_for_clip,
 )
 
 
@@ -43,7 +42,7 @@ _CLIP_UPDATE_FIELDS = (
     "file_size", "file_mtime_ns", "revision", "analysis_status", "analysis_error", "duration_ms",
     "media_library", "media_type", "title", "show", "season_number", "episode_number", "year",
     "username", "original_start_time", "original_end_time", "source_key", "clip_number", "clip_title",
-    "clip_title_custom", "created_at", "legacy_import_pending",
+    "clip_title_custom", "created_at",
 )
 _CLIP_UPDATE_SQL = """
     UPDATE clips SET
@@ -68,8 +67,6 @@ _CLIP_UPDATE_SQL = """
         clip_title = COALESCE(:clip_title, clip_title),
         clip_title_custom = COALESCE(:clip_title_custom, clip_title_custom),
         created_at = COALESCE(:created_at, created_at),
-        legacy_import_pending = CASE WHEN :clear_legacy_pending THEN 0
-            ELSE COALESCE(:legacy_import_pending, legacy_import_pending) END,
         analyzed_at = CASE WHEN :mark_analyzed THEN CURRENT_TIMESTAMP ELSE analyzed_at END,
         updated_at = CURRENT_TIMESTAMP
     WHERE id = :clip_id
@@ -190,19 +187,6 @@ def _duration_from_probe(probe: dict) -> int:
         return 0
 
 
-def _legacy_payload(clip_path: Path):
-    for path in (metadata_path_for_clip(clip_path), legacy_metadata_path_for_clip(clip_path)):
-        if path.is_file():
-            try:
-                payload = json.loads(path.read_text(encoding="utf-8"))
-                if not isinstance(payload, dict):
-                    raise ValueError("metadata root is not an object")
-                return payload, path, None
-            except (OSError, ValueError, TypeError) as error:
-                return None, path, error
-    return None, None, None
-
-
 def _next_clip_number(connection, source_key: str, excluded_id=None) -> int:
     if excluded_id is None:
         row = connection.execute(
@@ -231,7 +215,7 @@ def _number_is_available(connection, source_key: str, number: int, excluded_id=N
     return row is None
 
 
-def _update_clip(connection, clip_id: int, values: dict, analyzed=False, clear_legacy_pending=False) -> None:
+def _update_clip(connection, clip_id: int, values: dict, analyzed=False) -> None:
     unknown_columns = values.keys() - set(_CLIP_UPDATE_FIELDS)
     if unknown_columns:
         raise ValueError(f"Unsupported clip columns: {', '.join(sorted(unknown_columns))}")
@@ -240,7 +224,6 @@ def _update_clip(connection, clip_id: int, values: dict, analyzed=False, clear_l
     parameters.update({
         "clip_id": clip_id,
         "mark_analyzed": int(analyzed),
-        "clear_legacy_pending": int(clear_legacy_pending),
     })
     connection.execute(_CLIP_UPDATE_SQL, parameters)
 
@@ -301,13 +284,13 @@ def _metadata_from_row(connection, row) -> dict:
     return result
 
 
-def _insert_new_clip(connection, clip_path: Path, payload, probe, analysis_error, legacy_pending) -> int:
+def _insert_new_clip(connection, clip_path: Path, probe, analysis_error) -> int:
     file_stat = clip_path.stat()
     tags = (probe.get("format") or {}).get("tags") or {}
+
     def value(key, *fallback_keys):
-        if isinstance(payload, dict) and key in payload:
-            return _clean(payload.get(key))
         return next((_clean(tags.get(candidate)) for candidate in (key,) + fallback_keys if _clean(tags.get(candidate))), "")
+
     title, show = value("title"), value("show")
     season, episode = value("season_number"), value("episode_number", "episode_id")
     inferred_type = "episode" if show or season or episode else "movie"
@@ -318,38 +301,27 @@ def _insert_new_clip(connection, clip_path: Path, payload, probe, analysis_error
                "season_number": season if media_type == "episode" else "",
                "episode_number": episode if media_type == "episode" else "",
                "year": _four_digit_year(value("year", "date")) if media_type == "movie" else ""}
-    source_key = _clean((payload or {}).get("source_key")) or _source_key(details)
-    preferred = _positive_integer((payload or {}).get("clip_number"), 0)
-    number = preferred if preferred and _number_is_available(connection, source_key, preferred) else _next_clip_number(connection, source_key)
-    supplied_title = _clean((payload or {}).get("clip_title"))
-    supplied_identity = bool(preferred and number == preferred and _clean((payload or {}).get("source_key")) and supplied_title)
-    custom = bool((payload or {}).get("clip_title_custom")) and bool(supplied_title)
-    clip_title = supplied_title if supplied_identity else _numbered_clip_title(_base_clip_title(details), number)
+    source_key = _source_key(details)
+    number = _next_clip_number(connection, source_key)
+    clip_title = _numbered_clip_title(_base_clip_title(details), number)
     duration = _duration_from_probe(probe)
     start = value("original_start_time", "comment") or "00:00:00.000"
     end = value("original_end_time", "clip_end_time") or _format_timestamp(_timestamp_milliseconds(start) + duration)
-    created_at = _clean((payload or {}).get("created_at")) or _utc_timestamp(file_stat.st_mtime)
+    created_at = _utc_timestamp(file_stat.st_mtime)
     revision = hashlib.sha256(f"{file_stat.st_size}:{file_stat.st_mtime_ns}".encode("ascii")).hexdigest()[:24]
-    cursor = connection.execute(
+    return connection.execute(
         """INSERT INTO clips (file_path, file_size, file_mtime_ns, revision, analysis_status, analysis_error, analyzed_at,
         duration_ms, media_library, media_type, title, show, season_number, episode_number, year, username,
         original_start_time, original_end_time, source_key, clip_number, clip_title, clip_title_custom, created_at,
-        updated_at, legacy_import_pending) VALUES (?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP, ?)""",
+        updated_at) VALUES (?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP)""",
         (public_media_path(clip_path), file_stat.st_size, file_stat.st_mtime_ns, revision,
          "error" if analysis_error else "ready", analysis_error, duration, details["media_library"], media_type,
          title, details["show"], details["season_number"], details["episode_number"], details["year"],
-         value("username", "artist"), start, end, source_key, number, clip_title, int(custom), created_at, int(legacy_pending)),
-    )
-    if isinstance((payload or {}).get("source"), dict):
-        _save_source(connection, cursor.lastrowid, payload["source"])
-    return cursor.lastrowid
+         value("username", "artist"), start, end, source_key, number, clip_title, 0, created_at),
+    ).lastrowid
 
 
 def _sync_clip(clip_path: Path) -> None:
-    sidecar, sidecar_path, sidecar_error = _legacy_payload(clip_path)
-    if sidecar_error:
-        LOGGER.warning("Could not import clip metadata from %s: %s", sidecar_path, sidecar_error)
-    unlink_after_commit = None
     with lock_for_clip(clip_path):
         file_stat, public_path = clip_path.stat(), public_media_path(clip_path)
         with database.transaction(immediate=True) as connection:
@@ -362,8 +334,7 @@ def _sync_clip(clip_path: Path) -> None:
                 except (OSError, ffmpeg.Error) as error:
                     probe_error = str(error) or "ffprobe failed"
             if row is None:
-                _insert_new_clip(connection, clip_path, sidecar, probe, probe_error, sidecar_error is not None)
-                unlink_after_commit = sidecar_path if sidecar is not None else None
+                _insert_new_clip(connection, clip_path, probe, probe_error)
             else:
                 updates = {}
                 if changed:
@@ -372,41 +343,8 @@ def _sync_clip(clip_path: Path) -> None:
                                     "analysis_status": "error" if probe_error else "ready", "analysis_error": probe_error})
                     if not probe_error:
                         updates["duration_ms"] = _duration_from_probe(probe)
-                if sidecar is not None and row["legacy_import_pending"]:
-                    for field in TEXT_FIELDS + TIMELINE_FIELDS + ("username",):
-                        if field in sidecar:
-                            updates[field] = _clean(sidecar.get(field))
-                    if _clean(sidecar.get("media_type")) in VALID_MEDIA_TYPES:
-                        updates["media_type"] = _clean(sidecar.get("media_type"))
-                    merged = dict(row)
-                    merged.update(updates)
-                    source_key = _clean(sidecar.get("source_key")) or _source_key(merged)
-                    preferred = _positive_integer(sidecar.get("clip_number"), 0)
-                    if preferred and _number_is_available(connection, source_key, preferred, row["id"]):
-                        number = preferred
-                    elif source_key == row["source_key"]:
-                        number = row["clip_number"]
-                    else:
-                        number = _next_clip_number(connection, source_key, row["id"])
-                    supplied_title = _clean(sidecar.get("clip_title"))
-                    custom = bool(sidecar.get("clip_title_custom")) and bool(supplied_title)
-                    retained_title = supplied_title if custom or (preferred and number == preferred) else ""
-                    updates.update({
-                        "source_key": source_key, "clip_number": number,
-                        "clip_title": retained_title or _numbered_clip_title(_base_clip_title(merged), number),
-                        "clip_title_custom": int(custom), "legacy_import_pending": 0,
-                    })
-                    if isinstance(sidecar.get("source"), dict):
-                        _save_source(connection, row["id"], sidecar["source"])
-                if sidecar is not None:
-                    unlink_after_commit = sidecar_path
                 if updates:
                     _update_clip(connection, row["id"], updates, analyzed=True)
-        if unlink_after_commit is not None:
-            try:
-                unlink_after_commit.unlink(missing_ok=True)
-            except OSError as error:
-                LOGGER.warning("Imported %s but could not remove it: %s", unlink_after_commit, error)
 
 
 def sync_library() -> None:
@@ -480,7 +418,8 @@ def list_clips(limit=None, sort="newest") -> list:
         return [_descriptor(row) for row in rows]
 
 
-def _read_sidecar(clip_path: Path, migrate_legacy=True) -> dict:
+def load_clip_metadata(file_path) -> dict:
+    clip_path = _resolve_clip_path(file_path)
     row = _row_for_path(clip_path)
     if row is None:
         return {}
@@ -488,7 +427,7 @@ def _read_sidecar(clip_path: Path, migrate_legacy=True) -> dict:
         return _metadata_from_row(connection, row)
 
 
-def _update_sidecar(file_path, updates: dict, created_at=None) -> None:
+def update_clip_fields(file_path, updates: dict) -> None:
     clip_path = _resolve_clip_path(file_path)
     row = _row_for_path(clip_path)
     if row is None:
@@ -595,7 +534,7 @@ def save_clip_metadata(file_path: str, payload: dict, initialize=False) -> dict:
         values.update({"source_key": source_key, "clip_number": number, "clip_title": title, "clip_title_custom": int(custom)})
         if _clean(payload.get("created_at")):
             values["created_at"] = _clean(payload.get("created_at"))
-        _update_clip(connection, row["id"], values, clear_legacy_pending=True)
+        _update_clip(connection, row["id"], values)
         if initialize and isinstance(payload.get("source"), dict):
             _save_source(connection, row["id"], payload["source"])
     return describe_clip(clip_path)

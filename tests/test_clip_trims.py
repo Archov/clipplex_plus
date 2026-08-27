@@ -14,8 +14,6 @@ from app.media_files import (
     PREVIEW_DIRECTORY,
     VIDEO_DIRECTORY,
     gif_path_for_clip,
-    legacy_metadata_path_for_clip,
-    metadata_path_for_clip,
     public_media_path,
     thumbnail_path_for_clip,
 )
@@ -40,8 +38,7 @@ class ClipTrimValidationTests(unittest.TestCase):
     def tearDown(self):
         self.probe.stop()
         for path in (
-            self.clip_path, metadata_path_for_clip(self.clip_path), legacy_metadata_path_for_clip(self.clip_path),
-            gif_path_for_clip(self.clip_path), thumbnail_path_for_clip(self.clip_path),
+            self.clip_path, gif_path_for_clip(self.clip_path), thumbnail_path_for_clip(self.clip_path),
         ):
             path.unlink(missing_ok=True)
         for path in PREVIEW_DIRECTORY.glob(f"{self.clip_path.stem}-*.mp4"):
@@ -69,18 +66,9 @@ class ClipTrimValidationTests(unittest.TestCase):
         with self.assertRaisesRegex(Exception, "generated Clipplex"):
             clip_trims.validate_trim_payload({**self.payload(), "file_path": "../secret.mp4"})
 
-    def test_metadata_moves_to_private_directory_and_static_access_is_blocked(self):
-        legacy = legacy_metadata_path_for_clip(self.clip_path)
-        legacy.write_text(json.dumps({"title": "Legacy Movie"}), encoding="utf-8")
-
-        clip = clip_library.describe_clip(self.clip_path)
-
-        self.assertEqual(clip["title"], "Legacy Movie")
-        self.assertFalse(metadata_path_for_clip(self.clip_path).is_file())
-        self.assertFalse(legacy.is_file())
+    def test_private_database_static_access_is_blocked(self):
         client = app.test_client()
-        self.assertEqual(client.get(f"/static/media/.clipplex/metadata/{self.clip_path.stem}.json").status_code, 404)
-        self.assertEqual(client.get(f"/static/media/videos/{self.clip_path.stem}.clipplex.json").status_code, 404)
+        self.assertEqual(client.get("/static/media/.clipplex/clipplex.sqlite3").status_code, 404)
 
     def test_metadata_edits_preserve_private_source_provenance(self):
         source = {"version": 1, "media_path": "/private/movie.mkv"}
@@ -95,7 +83,7 @@ class ClipTrimValidationTests(unittest.TestCase):
             "title": "Movie", "year": "", "show": "", "season_number": "", "episode_number": "",
         })
 
-        stored = clip_library._read_sidecar(self.clip_path)
+        stored = clip_library.load_clip_metadata(self.clip_path)
         self.assertEqual(stored["source"]["version"], source["version"])
         self.assertEqual(stored["source"]["media_path"], source["media_path"])
 
@@ -107,7 +95,7 @@ class ClipTrimValidationTests(unittest.TestCase):
             "audio_track": {"id": "audio", "index": 1, "track_type": "audio", "selected": True},
             "subtitle_track": None,
         }
-        clip_library._update_sidecar(public_media_path(self.clip_path), {"source": source})
+        clip_library.update_clip_fields(public_media_path(self.clip_path), {"source": source})
 
         options = clip_trims.source_options(public_media_path(self.clip_path))
 
@@ -133,7 +121,7 @@ class ClipTrimValidationTests(unittest.TestCase):
         self.assertEqual(preview["window_end_ms"], 100000)
         self.assertNotIn(str(self.clip_path), json.dumps(result))
 
-    def test_legacy_clip_without_saved_source_returns_a_clear_error(self):
+    def test_clip_without_saved_source_returns_a_clear_error(self):
         with self.assertRaises(clip_trims.ClipTrimError) as caught:
             clip_trims.source_options(public_media_path(self.clip_path))
 
@@ -155,7 +143,7 @@ class ClipTrimValidationTests(unittest.TestCase):
             "audio_track": {"id": "audio", "index": 1, "track_type": "audio", "selected": True},
             "subtitle_track": None,
         }
-        clip_library._update_sidecar(public_media_path(self.clip_path), {"source": source})
+        clip_library.update_clip_fields(public_media_path(self.clip_path), {"source": source})
 
         original_path.unlink()
         with self.assertRaises(clip_trims.ClipTrimError) as deleted:
@@ -193,7 +181,7 @@ class SyntheticClipTrimTests(unittest.TestCase):
 
     def tearDown(self):
         for clip in list(VIDEO_DIRECTORY.glob(f"{self.clip_path.stem}*.mp4")):
-            for companion in (metadata_path_for_clip(clip), gif_path_for_clip(clip), thumbnail_path_for_clip(clip)):
+            for companion in (gif_path_for_clip(clip), thumbnail_path_for_clip(clip)):
                 companion.unlink(missing_ok=True)
             clip.unlink(missing_ok=True)
 
