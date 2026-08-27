@@ -110,7 +110,7 @@ def _validate_url(key: str, value: str) -> None:
     if not value:
         return
     parsed = urlsplit(value)
-    if parsed.scheme not in {"http", "https"} or not parsed.netloc:
+    if parsed.scheme not in {"http", "https"} or not parsed.netloc or parsed.query or parsed.fragment:
         raise SettingsError(f"{SETTING_DEFINITIONS[key]['label']} must be a complete HTTP(S) URL.")
 
 
