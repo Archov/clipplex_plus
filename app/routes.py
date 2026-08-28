@@ -307,6 +307,44 @@ def upload_clip():
         return jsonify({"result": "error", "message": error.message}), error.status_code
 
 
+@app.route("/api/immich/assets/check", methods=["POST"])
+def check_immich_asset():
+    try:
+        payload = request.get_json(silent=True)
+        if not isinstance(payload, dict):
+            raise MediaFileError("The Immich asset check must contain a JSON object.")
+        file_path = payload.get("file_path")
+        clip = clip_library.describe_clip(file_path)
+        asset_id = clip.get("immich_asset_id")
+        if not asset_id:
+            raise MediaFileError("This clip is not linked to an Immich asset.", 404)
+        uploader = uploaders.ImmichUploader()
+        if not uploader.asset_exists(asset_id):
+            clip_library.update_clip_fields(file_path, {"immich_asset_id": ""})
+            return jsonify({
+                "result": "not_found",
+                "exists": False,
+                "message": "The linked Immich asset has been deleted",
+            }), 404
+        response = jsonify({
+            "result": "success",
+            "exists": True,
+            "url": uploader.asset_url(asset_id),
+        })
+        response.headers["Cache-Control"] = "no-store"
+        return response
+    except MediaFileError as error:
+        return jsonify({"result": "error", "message": error.message}), error.status_code
+    except uploaders.UploadError as error:
+        return jsonify({
+            "result": "error",
+            "message": "The Immich asset could not be verified: " + error.message,
+        }), error.status_code
+    except sqlite3.Error:
+        app.logger.exception("Could not clear a stale Immich asset link")
+        return jsonify({"result": "error", "message": "The stale Immich link could not be removed."}), 500
+
+
 def _auto_upload_immich(clip, progress=None):
     if settings.get("immich_auto_upload") != "true" or "immich" not in uploaders.configured_uploader_ids():
         return None

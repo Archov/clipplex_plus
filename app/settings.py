@@ -12,6 +12,22 @@ class SettingsError(ValueError):
         self.status_code = status_code
 
 
+IMMICH_REQUIRED_PERMISSIONS = (
+    "asset.upload",
+    "asset.update",
+    "asset.read",
+    "tag.read",
+    "tag.create",
+    "tag.asset",
+    "album.read",
+    "album.create",
+    "albumAsset.create",
+)
+IMMICH_OPTIONAL_PERMISSIONS = {
+    "asset.delete": "Used only when Manage Immich clips after upload is enabled.",
+}
+
+
 SETTING_DEFINITIONS = {
     "plex_url": {
         "environment": "PLEX_URL",
@@ -63,15 +79,8 @@ SETTING_DEFINITIONS = {
         "help": "API key used for Immich uploads.",
         "kind": "password",
         "permissions": [
-            "asset.upload",
-            "asset.update",
+            *IMMICH_REQUIRED_PERMISSIONS,
             "asset.delete (only if 'Manage Immich clips after upload' is enabled)",
-            "tag.read",
-            "tag.create",
-            "tag.asset",
-            "album.read",
-            "album.create",
-            "albumAsset.create",
         ],
     },
     "immich_default_tag": {
@@ -344,6 +353,8 @@ def update_ui_settings(values, clear_keys=None) -> dict:
             raise SettingsError(f"{SETTING_DEFINITIONS[key]['label']} must be text.")
         cleaned_values[key] = _validate_value(key, value)
 
+    if cleaned_values.get("immich_auto_tag_title") == "false":
+        cleaned_values["immich_auto_tag_episode"] = "false"
     with database.transaction(immediate=True) as connection:
         for key, value in cleaned_values.items():
             _upsert(connection, key, value, SETTING_DEFINITIONS[key]["secret"])
@@ -408,12 +419,49 @@ def test_service(service: str) -> dict:
         try:
             from app.uploaders import ImmichUploader
 
-            ImmichUploader().get_tags()
+            key = ImmichUploader().get_api_key()
         except Exception as error:
             raise SettingsError(
                 "Could not connect to Immich with the saved URL and API key.", 502
             ) from error
-        return {"service": service, "ok": True, "message": "Connected to Immich."}
+        granted = set(key["permissions"])
+        grants_all = "all" in granted
+        needed_present = [
+            permission
+            for permission in IMMICH_REQUIRED_PERMISSIONS
+            if grants_all or permission in granted
+        ]
+        needed_missing = [
+            permission
+            for permission in IMMICH_REQUIRED_PERMISSIONS
+            if not grants_all and permission not in granted
+        ]
+        optional = [
+            {
+                "permission": permission,
+                "present": grants_all or permission in granted,
+                "description": description,
+            }
+            for permission, description in IMMICH_OPTIONAL_PERMISSIONS.items()
+        ]
+        recognized = set(IMMICH_REQUIRED_PERMISSIONS) | set(IMMICH_OPTIONAL_PERMISSIONS)
+        present_unused = sorted(granted - recognized)
+        return {
+            "service": service,
+            "ok": True,
+            "message": (
+                "Connected to Immich."
+                if not needed_missing
+                else "Connected to Immich, but required permissions are missing."
+            ),
+            "api_key_name": key["name"],
+            "permission_groups": {
+                "needed_present": needed_present,
+                "needed_missing": needed_missing,
+                "optional": optional,
+                "present_unused": present_unused,
+            },
+        }
     raise SettingsError("Select a supported service to test.")
 
 

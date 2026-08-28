@@ -13,10 +13,11 @@ REQUEST_TIMEOUT = (15, 300)
 
 
 class UploadError(Exception):
-    def __init__(self, message: str, status_code: int = 502):
+    def __init__(self, message: str, status_code: int = 502, upstream_status: int = None):
         super().__init__(message)
         self.message = message
         self.status_code = status_code
+        self.upstream_status = upstream_status
 
 
 def _setting(name: str) -> str:
@@ -128,7 +129,11 @@ class ImmichUploader:
         except requests.RequestException as error:
             response = getattr(error, "response", None)
             reason = _response_message(response) if response is not None else str(error)
-            raise UploadError(f"Immich request failed: {reason}") from error
+            upstream_status = response.status_code if response is not None else None
+            raise UploadError(
+                f"Immich request failed: {reason}",
+                upstream_status=upstream_status,
+            ) from error
         except ValueError as error:
             raise UploadError("Immich returned an invalid response.") from error
 
@@ -161,6 +166,21 @@ class ImmichUploader:
             "default_tag": self.default_tag or None,
         }
 
+    def get_api_key(self) -> dict:
+        payload = self._request("GET", "/api-keys/me")
+        permissions = payload.get("permissions") if isinstance(payload, dict) else None
+        if (
+            not isinstance(payload, dict)
+            or not isinstance(payload.get("name"), str)
+            or not isinstance(permissions, list)
+            or not all(isinstance(permission, str) for permission in permissions)
+        ):
+            raise UploadError("Immich returned an invalid API key response.")
+        return {
+            "name": payload["name"],
+            "permissions": sorted(set(permissions), key=str.casefold),
+        }
+
     def _upload_asset(self, clip_path: Path) -> dict:
         file_stat = clip_path.stat()
         created = datetime.fromtimestamp(file_stat.st_ctime, timezone.utc).isoformat()
@@ -183,8 +203,38 @@ class ImmichUploader:
     def asset_url(self, asset_id: str) -> str:
         return immich_asset_url(asset_id)
 
+    def get_asset(self, asset_id: str) -> dict:
+        payload = self._request("GET", f"/assets/{asset_id}")
+        if not isinstance(payload, dict) or payload.get("id") != asset_id:
+            raise UploadError("Immich returned an invalid asset response.")
+        return payload
+
+    def asset_exists(self, asset_id: str) -> bool:
+        try:
+            self.get_asset(asset_id)
+            return True
+        except UploadError as error:
+            ambiguous_missing = "not found or no asset.read access" in error.message.casefold()
+            missing = error.upstream_status == 404 or (
+                error.upstream_status == 400
+                and "asset not found" in error.message.casefold()
+            )
+            if missing:
+                return False
+            if ambiguous_missing:
+                key = self.get_api_key()
+                permissions = set(key["permissions"])
+                if "asset.read" in permissions or "all" in permissions:
+                    return False
+            raise
+
     def _update_description(self, asset_id: str, title: str) -> None:
         self._request("PUT", f"/assets/{asset_id}", json={"description": title})
+        asset = self.get_asset(asset_id)
+        exif_info = asset.get("exifInfo") if isinstance(asset.get("exifInfo"), dict) else {}
+        stored_description = exif_info.get("description", asset.get("description", ""))
+        if stored_description != title:
+            raise UploadError("Immich did not retain the clip title as the asset description.")
 
     def delete_asset(self, asset_id: str) -> None:
         if asset_id:

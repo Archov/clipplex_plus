@@ -155,11 +155,7 @@
     download.append(icon('download'), Object.assign(document.createElement('span'), {textContent: 'Download'}));
     actions.appendChild(download);
     if (clip.immich_asset_url) {
-      const immich = document.createElement('a');
-      immich.className = 'clip-action'; immich.href = clip.immich_asset_url; immich.target = '_blank'; immich.rel = 'noopener noreferrer';
-      immich.title = 'Open in Immich'; immich.setAttribute('aria-label', 'Open in Immich');
-      immich.append(icon('external-link-alt'), Object.assign(document.createElement('span'), {textContent: 'Open in Immich'}));
-      actions.appendChild(immich);
+      actions.appendChild(actionButton('Open in Immich', 'external-link-alt', '', () => openImmichAsset(clip)));
     }
     const immichOnlyWithAsset = state.uploaders.length === 1 && state.uploaders[0].id === 'immich' && clip.immich_asset_id;
     if (state.uploaders.length && !immichOnlyWithAsset) actions.appendChild(actionButton('Upload', 'share-square', '', () => openUpload(clip)));
@@ -238,6 +234,34 @@
     alert.textContent = message;
     byId('library_notice').replaceChildren(alert);
     window.setTimeout(() => { if (alert.isConnected) alert.remove(); }, 5000);
+  }
+
+  async function openImmichAsset(clip) {
+    const pendingWindow = window.open('', '_blank');
+    if (pendingWindow) pendingWindow.opener = null;
+    try {
+      const response = await fetch('/api/immich/assets/check', {
+        method: 'POST',
+        headers: {'Content-Type': 'application/json'},
+        body: JSON.stringify({file_path: clip.file_path}),
+      });
+      const result = await response.json();
+      if (!response.ok) {
+        if (response.status === 404 && result.result === 'not_found') {
+          if (pendingWindow) pendingWindow.close();
+          notice(result.message || "This asset can't be found in Immich.", 'warning');
+          try { await refreshClips(); }
+          catch (error) { notice(`${result.message} The library could not refresh: ${error.message}`, 'warning'); }
+          return;
+        }
+        throw new Error(result.message || 'The Immich asset could not be verified.');
+      }
+      if (pendingWindow) pendingWindow.location.replace(result.url);
+      else notice('The Immich asset exists, but the browser blocked the new tab.', 'warning');
+    } catch (error) {
+      if (pendingWindow) pendingWindow.close();
+      notice(error.message, 'danger');
+    }
   }
 
   function immichJobWarning(result) {

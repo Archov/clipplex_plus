@@ -226,6 +226,8 @@ class CreateVideoRouteTests(unittest.TestCase):
         library_script = script_response.get_data(as_text=True)
         self.assertIn("payload.apply_auto_tags", library_script)
         self.assertIn("immichJobWarning", library_script)
+        self.assertIn("/api/immich/assets/check", library_script)
+        self.assertIn("openImmichAsset(clip)", library_script)
         script_response.close()
         self.assertIn("collapsedLibraries: new Set()", library_script)
         self.assertIn("toggle.setAttribute('aria-expanded'", library_script)
@@ -497,6 +499,54 @@ class CreateVideoRouteTests(unittest.TestCase):
         self.assertEqual(response.status_code, 200)
         self.assertEqual(response.get_json()["default_tag"], "#plex-clip")
         self.assertEqual(response.headers["Cache-Control"], "no-store")
+
+    def test_immich_asset_check_returns_verified_url(self):
+        with patch("app.routes.clip_library.describe_clip", return_value={"immich_asset_id": "asset-1"}), \
+             patch("app.routes.uploaders.ImmichUploader") as immich:
+            immich.return_value.asset_exists.return_value = True
+            immich.return_value.asset_url.return_value = "https://immich.example/photos/asset-1"
+
+            response = self.client.post("/api/immich/assets/check", json={
+                "file_path": "static/media/videos/clip.mp4",
+            })
+
+        self.assertEqual(response.status_code, 200)
+        self.assertTrue(response.get_json()["exists"])
+        self.assertEqual(response.get_json()["url"], "https://immich.example/photos/asset-1")
+        self.assertEqual(response.headers["Cache-Control"], "no-store")
+        immich.return_value.asset_exists.assert_called_once_with("asset-1")
+
+    def test_immich_asset_check_clears_stale_asset_id(self):
+        with patch("app.routes.clip_library.describe_clip", return_value={"immich_asset_id": "asset-1"}), \
+             patch("app.routes.clip_library.update_clip_fields") as update, \
+             patch("app.routes.uploaders.ImmichUploader") as immich:
+            immich.return_value.asset_exists.return_value = False
+
+            response = self.client.post("/api/immich/assets/check", json={
+                "file_path": "static/media/videos/clip.mp4",
+            })
+
+        self.assertEqual(response.status_code, 404)
+        self.assertEqual(response.get_json()["result"], "not_found")
+        self.assertFalse(response.get_json()["exists"])
+        self.assertEqual(response.get_json()["message"], "The linked Immich asset has been deleted")
+        update.assert_called_once_with(
+            "static/media/videos/clip.mp4", {"immich_asset_id": ""},
+        )
+
+    def test_immich_asset_check_does_not_clear_id_when_verification_fails(self):
+        with patch("app.routes.clip_library.describe_clip", return_value={"immich_asset_id": "asset-1"}), \
+             patch("app.routes.clip_library.update_clip_fields") as update, \
+             patch("app.routes.uploaders.ImmichUploader") as immich:
+            immich.return_value.asset_exists.side_effect = uploaders.UploadError("Permission denied")
+
+            response = self.client.post("/api/immich/assets/check", json={
+                "file_path": "static/media/videos/clip.mp4",
+            })
+
+        self.assertEqual(response.status_code, 502)
+        self.assertIn("could not be verified", response.get_json()["message"])
+        update.assert_not_called()
 
     @patch("app.routes.uploaders.upload_clip")
     def test_unified_upload_route_forwards_immich_metadata(self, upload):

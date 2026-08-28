@@ -127,6 +127,33 @@ class ImmichUploaderTests(unittest.TestCase):
         with patch("app.uploaders._setting", side_effect=lambda key: "http://immich:2283/api/" if key == "immich_url" else ""):
             self.assertEqual(uploaders.immich_asset_url("asset-1"), "http://immich:2283/photos/asset-1")
 
+    def test_api_key_introspection_uses_current_key_endpoint_and_redacts_response(self):
+        with self.environment(), patch("app.uploaders.requests.request") as request:
+            request.return_value = ResponseStub({
+                "id": "key-id",
+                "name": "Clipplex",
+                "permissions": ["tag.read", "asset.read", "tag.read"],
+            })
+            result = uploaders.ImmichUploader().get_api_key()
+
+        self.assertEqual(result, {
+            "name": "Clipplex",
+            "permissions": ["asset.read", "tag.read"],
+        })
+        self.assertNotIn("id", result)
+        self.assertEqual(
+            request.call_args.args[:2],
+            ("GET", "http://immich:2283/api/api-keys/me"),
+        )
+        self.assertEqual(request.call_args.kwargs["headers"]["x-api-key"], "secret")
+
+    def test_api_key_introspection_rejects_malformed_response(self):
+        with self.environment(), patch.object(
+            uploaders.ImmichUploader, "_request", return_value={"name": "Clipplex"}
+        ):
+            with self.assertRaises(uploaders.UploadError):
+                uploaders.ImmichUploader().get_api_key()
+
     def test_upload_asset_sends_required_dates_filename_and_api_key(self):
         clip = uploaders.CLIP_DIRECTORY / "_uploader_test.mp4"
         try:
@@ -211,6 +238,76 @@ class ImmichUploaderTests(unittest.TestCase):
         description.assert_called_once_with("asset-1", "My Clip")
         hierarchy.assert_called_once()
         tags.assert_called_once_with("asset-1", ["episode-tag-id"], [])
+
+    def test_description_update_uses_single_asset_upsert_and_verifies_value(self):
+        with self.environment(), patch.object(uploaders.ImmichUploader, "_request") as request:
+            request.side_effect = [
+                {"id": "asset-1"},
+                {"id": "asset-1", "exifInfo": {"description": "My Clip"}},
+            ]
+            uploaders.ImmichUploader()._update_description("asset-1", "My Clip")
+
+        self.assertEqual(request.call_args_list, [
+            call("PUT", "/assets/asset-1", json={"description": "My Clip"}),
+            call("GET", "/assets/asset-1"),
+        ])
+
+    def test_description_update_fails_when_immich_does_not_retain_value(self):
+        with self.environment(), patch.object(uploaders.ImmichUploader, "_request") as request:
+            request.side_effect = [
+                {"id": "asset-1"},
+                {"id": "asset-1", "exifInfo": {"description": ""}},
+            ]
+            with self.assertRaises(uploaders.UploadError) as raised:
+                uploaders.ImmichUploader()._update_description("asset-1", "My Clip")
+
+        self.assertIn("did not retain", raised.exception.message)
+
+    def test_asset_exists_distinguishes_missing_assets_from_connection_failures(self):
+        with self.environment(), patch("app.uploaders.requests.request") as request:
+            request.return_value = ResponseStub({"message": "Asset not found"}, 400)
+            self.assertFalse(uploaders.ImmichUploader().asset_exists("asset-1"))
+
+            request.return_value = ResponseStub({"message": "Permission denied"}, 403)
+            with self.assertRaises(uploaders.UploadError):
+                uploaders.ImmichUploader().asset_exists("asset-1")
+
+    def test_ambiguous_missing_asset_is_confirmed_with_current_key_permissions(self):
+        with self.environment(), patch("app.uploaders.requests.request") as request:
+            request.side_effect = [
+                ResponseStub({"message": "Not found or no asset.read access"}, 400),
+                ResponseStub({
+                    "id": "key-id",
+                    "name": "Clipplex",
+                    "permissions": ["asset.read", "asset.upload"],
+                }),
+            ]
+
+            self.assertFalse(uploaders.ImmichUploader().asset_exists("asset-1"))
+
+        self.assertEqual(
+            [item.args[:2] for item in request.call_args_list],
+            [
+                ("GET", "http://immich:2283/api/assets/asset-1"),
+                ("GET", "http://immich:2283/api/api-keys/me"),
+            ],
+        )
+
+    def test_ambiguous_missing_asset_is_not_assumed_deleted_without_read_permission(self):
+        with self.environment(), patch("app.uploaders.requests.request") as request:
+            request.side_effect = [
+                ResponseStub({"message": "Not found or no asset.read access"}, 400),
+                ResponseStub({
+                    "id": "key-id",
+                    "name": "Clipplex",
+                    "permissions": ["asset.upload"],
+                }),
+            ]
+
+            with self.assertRaises(uploaders.UploadError) as raised:
+                uploaders.ImmichUploader().asset_exists("asset-1")
+
+        self.assertIn("Not found or no asset.read access", raised.exception.message)
 
     def test_hierarchy_reuses_existing_parent_and_assigns_only_the_leaf(self):
         setting_values = {

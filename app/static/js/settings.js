@@ -24,11 +24,108 @@
     delete button.dataset.testResult;
   }
 
-  function showTestResult(button, message, succeeded) {
+  function showTestResult(button, message, style) {
     button.disabled = false;
     button.dataset.testResult = 'true';
-    button.className = `btn btn-outline-${succeeded ? 'success' : 'danger'} btn-sm`;
+    button.className = `btn btn-outline-${style} btn-sm`;
     button.textContent = message;
+  }
+
+  function appendPermissionGroup(root, title, items, emptyMessage, style, itemContent) {
+    const section = document.createElement('section');
+    section.className = 'mb-4';
+    const heading = document.createElement('h3');
+    heading.className = 'h6 mb-2';
+    heading.textContent = title;
+    section.append(heading);
+
+    if (!items.length) {
+      const empty = document.createElement('p');
+      empty.className = 'text-muted mb-0';
+      empty.textContent = emptyMessage;
+      section.append(empty);
+      root.append(section);
+      return;
+    }
+
+    const list = document.createElement('ul');
+    list.className = 'list-group';
+    for (const item of items) {
+      const row = document.createElement('li');
+      row.className = 'list-group-item d-flex justify-content-between align-items-start gap-3';
+      const content = itemContent(item);
+      row.append(content.node);
+      const badge = document.createElement('span');
+      badge.className = `badge text-bg-${content.style || style}`;
+      badge.textContent = content.status;
+      row.append(badge);
+      list.append(row);
+    }
+    section.append(list);
+    root.append(section);
+  }
+
+  function showImmichPermissionReport(payload) {
+    const body = document.getElementById('immich_permissions_body');
+    const title = document.getElementById('immich_permissions_title');
+    const groups = payload.permission_groups;
+    if (!body || !title || !groups) return;
+
+    title.textContent = `Immich API key permissions: ${payload.api_key_name || 'saved key'}`;
+    body.replaceChildren();
+
+    const missing = Array.isArray(groups.needed_missing) ? groups.needed_missing : [];
+    const summary = document.createElement('div');
+    summary.className = `alert alert-${missing.length ? 'warning' : 'success'}`;
+    summary.setAttribute('role', 'status');
+    summary.textContent = missing.length
+      ? `${missing.length} required permission${missing.length === 1 ? ' is' : 's are'} missing.`
+      : 'All permissions needed for Clipplex uploads are present.';
+    body.append(summary);
+
+    const permissionItem = (permission, status) => {
+      const name = document.createElement('code');
+      name.textContent = permission;
+      return { node: name, status };
+    };
+    appendPermissionGroup(
+      body, 'Needed & present', Array.isArray(groups.needed_present) ? groups.needed_present : [],
+      'No required permissions are present.', 'success', item => permissionItem(item, 'Present')
+    );
+    appendPermissionGroup(
+      body, 'Needed & missing', missing, 'No required permissions are missing.',
+      'danger', item => permissionItem(item, 'Missing')
+    );
+    appendPermissionGroup(
+      body, 'Optional', Array.isArray(groups.optional) ? groups.optional : [],
+      'Clipplex does not use any optional permissions.', 'secondary', item => {
+        const wrapper = document.createElement('div');
+        const name = document.createElement('code');
+        name.textContent = item.permission;
+        wrapper.append(name);
+        if (item.description) {
+          const description = document.createElement('div');
+          description.className = 'small text-muted mt-1';
+          description.textContent = item.description;
+          wrapper.append(description);
+        }
+        return {
+          node: wrapper,
+          status: item.present ? 'Present' : 'Not present',
+          style: item.present ? 'info' : 'secondary',
+        };
+      }
+    );
+    appendPermissionGroup(
+      body, 'Present but unused', Array.isArray(groups.present_unused) ? groups.present_unused : [],
+      'The key has no permissions that Clipplex leaves unused.', 'secondary',
+      item => permissionItem(item, 'Unused')
+    );
+
+    const modalElement = document.getElementById('immich_permissions_modal');
+    if (modalElement && window.bootstrap?.Modal) {
+      window.bootstrap.Modal.getOrCreateInstance(modalElement).show();
+    }
   }
 
   function immichApiSettingsUrl(value) {
@@ -306,9 +403,15 @@
         method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ service }),
       });
       const payload = await response.json();
-      showTestResult(button, payload.message || 'Connection test complete.', response.ok);
+      if (response.ok && service === 'immich' && payload.permission_groups) {
+        showImmichPermissionReport(payload);
+        const missing = payload.permission_groups.needed_missing || [];
+        showTestResult(button, payload.message || 'Connection test complete.', missing.length ? 'warning' : 'success');
+      } else {
+        showTestResult(button, payload.message || 'Connection test complete.', response.ok ? 'success' : 'danger');
+      }
     } catch (_) {
-      showTestResult(button, 'The connection test could not be completed.', false);
+      showTestResult(button, 'The connection test could not be completed.', 'danger');
     }
   }
 
@@ -350,7 +453,12 @@
     const values = {};
     const clear = [];
     form.querySelectorAll('[data-setting-key]').forEach(control => {
-      if (control.disabled) return;
+      if (
+        control.disabled &&
+        control.dataset.dependencyDisabled !== 'true'
+      ) {
+        return;
+      }
       if (control.dataset.secret === 'true' && !control.value) return;
       values[control.dataset.settingKey] = control.type === 'checkbox' ? String(control.checked) : control.value;
     });

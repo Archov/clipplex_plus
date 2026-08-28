@@ -44,8 +44,10 @@ class SettingsUiTests(unittest.TestCase):
             "https://support.plex.tv/articles/204059436-finding-an-authentication-token-x-plex-token/",
         )
         self.assertEqual(fields["immich_api_key"]["permissions"], [
-            "asset.upload", "asset.update", "tag.read", "tag.create", "tag.asset",
+            "asset.upload", "asset.update", "asset.read",
+            "tag.read", "tag.create", "tag.asset",
             "album.read", "album.create", "albumAsset.create",
+            "asset.delete (only if 'Manage Immich clips after upload' is enabled)",
         ])
         self.assertNotIn("immich_auto_tag_mode", fields)
         self.assertNotIn('"value":"plex-token"', response.get_data(as_text=True))
@@ -57,6 +59,10 @@ class SettingsUiTests(unittest.TestCase):
         self.assertIn("Uploading…", script)
         self.assertIn("result.completed", script)
         self.assertIn("result.failed", script)
+        self.assertIn("Needed & present", script)
+        self.assertIn("Needed & missing", script)
+        self.assertIn("Present but unused", script)
+        self.assertIn(b'immich_permissions_modal', self.client.get("/settings.html").data)
 
     def test_patch_persists_secret_without_disclosing_it(self):
         response = self.client.patch("/api/settings", json={
@@ -106,6 +112,20 @@ class SettingsUiTests(unittest.TestCase):
         })
         self.assertEqual(response.status_code, 400)
         self.assertEqual(settings.get("immich_manage_assets"), "false")
+
+    def test_disabling_title_auto_tag_also_disables_episode_auto_tag(self):
+        settings.update_ui_settings({
+            "immich_auto_tag_title": "true",
+            "immich_auto_tag_episode": "true",
+        })
+
+        response = self.client.patch("/api/settings", json={
+            "values": {"immich_auto_tag_title": "false"}, "clear": [],
+        })
+
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(settings.get("immich_auto_tag_title"), "false")
+        self.assertEqual(settings.get("immich_auto_tag_episode"), "false")
 
     def test_patch_rejects_service_urls_with_unsupported_components(self):
         invalid_urls = (
@@ -172,16 +192,51 @@ class SettingsUiTests(unittest.TestCase):
         self.assertEqual(response.get_json()["message"], "Connected to Streamable.")
         self.assertEqual(request_get.call_args.kwargs["auth"], ("clipper@example.com", "streamable-secret"))
 
-    @patch("app.uploaders.ImmichUploader.get_tags")
-    def test_immich_connection_test_uses_saved_configuration(self, get_tags):
+    @patch("app.uploaders.ImmichUploader.get_api_key")
+    def test_immich_connection_test_groups_saved_key_permissions(self, get_api_key):
+        get_api_key.return_value = {
+            "name": "Clipplex restricted",
+            "permissions": [
+                "asset.upload", "asset.update", "asset.read", "asset.delete",
+                "tag.read", "tag.create",
+                "album.read", "album.create", "albumAsset.create",
+                "person.read",
+            ],
+        }
         with patch.dict(os.environ, {}, clear=True):
             settings.update_ui_settings({
                 "immich_url": "https://immich.example", "immich_api_key": "immich-secret",
             })
             response = self.client.post("/api/settings/tests", json={"service": "immich"})
         self.assertEqual(response.status_code, 200)
-        self.assertEqual(response.get_json()["message"], "Connected to Immich.")
-        get_tags.assert_called_once()
+        payload = response.get_json()
+        self.assertEqual(payload["message"], "Connected to Immich, but required permissions are missing.")
+        self.assertEqual(payload["api_key_name"], "Clipplex restricted")
+        self.assertEqual(payload["permission_groups"]["needed_missing"], ["tag.asset"])
+        self.assertEqual(payload["permission_groups"]["present_unused"], ["person.read"])
+        self.assertEqual(payload["permission_groups"]["optional"], [{
+            "permission": "asset.delete",
+            "present": True,
+            "description": "Used only when Manage Immich clips after upload is enabled.",
+        }])
+        self.assertIn("asset.upload", payload["permission_groups"]["needed_present"])
+        get_api_key.assert_called_once()
+
+    @patch("app.uploaders.ImmichUploader.get_api_key")
+    def test_immich_all_permission_satisfies_required_but_is_reported_unused(self, get_api_key):
+        get_api_key.return_value = {"name": "Full access", "permissions": ["all"]}
+        with patch.dict(os.environ, {}, clear=True):
+            settings.update_ui_settings({
+                "immich_url": "https://immich.example", "immich_api_key": "immich-secret",
+            })
+            response = self.client.post("/api/settings/tests", json={"service": "immich"})
+
+        payload = response.get_json()
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(payload["message"], "Connected to Immich.")
+        self.assertEqual(payload["permission_groups"]["needed_missing"], [])
+        self.assertTrue(payload["permission_groups"]["optional"][0]["present"])
+        self.assertEqual(payload["permission_groups"]["present_unused"], ["all"])
 
     def test_unknown_test_service_is_rejected(self):
         response = self.client.post("/api/settings/tests", json={"service": "unknown"})

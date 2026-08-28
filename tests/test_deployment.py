@@ -77,6 +77,7 @@ class DeploymentConfigurationTests(unittest.TestCase):
         self.assertIn("docker compose up -d --build", readme)
         self.assertIn("Immich v1.135 or newer", readme)
         self.assertIn("asset.update", readme)
+        self.assertIn("asset.read", readme)
         self.assertIn("asset.delete", readme)
         self.assertIn("Manage Immich clips after upload", readme)
         self.assertIn("Run exactly one Clipplex application process", readme)
