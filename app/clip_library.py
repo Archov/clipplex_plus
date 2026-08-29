@@ -42,7 +42,7 @@ _CLIP_UPDATE_FIELDS = (
     "file_size", "file_mtime_ns", "revision", "analysis_status", "analysis_error", "duration_ms",
     "media_library", "media_type", "title", "show", "season_number", "episode_number", "year",
     "username", "original_start_time", "original_end_time", "source_key", "clip_number", "clip_title",
-    "clip_title_custom", "created_at",
+    "clip_title_custom", "immich_asset_id", "created_at",
 )
 _CLIP_UPDATE_SQL = """
     UPDATE clips SET
@@ -66,6 +66,7 @@ _CLIP_UPDATE_SQL = """
         clip_number = COALESCE(:clip_number, clip_number),
         clip_title = COALESCE(:clip_title, clip_title),
         clip_title_custom = COALESCE(:clip_title_custom, clip_title_custom),
+        immich_asset_id = COALESCE(:immich_asset_id, immich_asset_id),
         created_at = COALESCE(:created_at, created_at),
         analyzed_at = CASE WHEN :mark_analyzed THEN CURRENT_TIMESTAMP ELSE analyzed_at END,
         updated_at = CURRENT_TIMESTAMP
@@ -277,7 +278,7 @@ def _metadata_from_row(connection, row) -> dict:
     result = {key: row[key] for key in TEXT_FIELDS + TIMELINE_FIELDS}
     result.update({"media_type": row["media_type"], "username": row["username"], "source_key": row["source_key"],
                    "clip_number": row["clip_number"], "clip_title": row["clip_title"],
-                   "clip_title_custom": bool(row["clip_title_custom"]), "created_at": row["created_at"], "version": 1})
+                   "clip_title_custom": bool(row["clip_title_custom"]), "immich_asset_id": row["immich_asset_id"], "created_at": row["created_at"], "version": 1})
     source = _source_for_clip(connection, row["id"])
     if source is not None:
         result["source"] = source
@@ -388,13 +389,24 @@ def _descriptor(row) -> dict:
         if row["year"]:
             display_heading = f"{display_heading} ({row['year']})"
         display_subtitle = "Movie"
+    immich_asset_id = row["immich_asset_id"]
+    immich_asset_url = ""
+    immich_can_delete = False
+    if immich_asset_id:
+        try:
+            from app.uploaders import immich_asset_url as build_immich_asset_url
+            from app import settings
+            immich_asset_url = build_immich_asset_url(immich_asset_id)
+            immich_can_delete = settings.get("immich_manage_assets") == "true"
+        except Exception:
+            pass
     return {"file_path": row["file_path"], "clip_title": row["clip_title"], "clip_number": row["clip_number"],
             "clip_title_custom": bool(row["clip_title_custom"]), "source_key": row["source_key"], "revision": row["revision"],
             "title": row["title"], "original_start_time": row["original_start_time"], "original_end_time": row["original_end_time"],
             "duration_ms": row["duration_ms"], "username": row["username"], "show": row["show"],
             "episode_number": row["episode_number"], "season_number": row["season_number"],
             "media_library": row["media_library"], "media_type": row["media_type"], "year": row["year"],
-            "created_at": row["created_at"], "episode_code": episode_code, "display_heading": display_heading,
+            "created_at": row["created_at"], "immich_asset_id": immich_asset_id, "immich_asset_url": immich_asset_url, "immich_can_delete": immich_can_delete, "episode_code": episode_code, "display_heading": display_heading,
             "display_subtitle": display_subtitle,
             "thumbnail_path": "/api/clips/thumbnail?file_path=" + quote(row["file_path"], safe="")}
 
@@ -432,7 +444,7 @@ def update_clip_fields(file_path, updates: dict) -> None:
     row = _row_for_path(clip_path)
     if row is None:
         raise MediaFileError("The selected generated clip no longer exists.", 404)
-    allowed = set(TEXT_FIELDS + TIMELINE_FIELDS + ("media_type", "username", "source_key", "clip_number", "clip_title", "clip_title_custom", "created_at"))
+    allowed = set(TEXT_FIELDS + TIMELINE_FIELDS + ("media_type", "username", "source_key", "clip_number", "clip_title", "clip_title_custom", "immich_asset_id", "created_at"))
     scalars = {key: value for key, value in updates.items() if key in allowed}
     with database.transaction(immediate=True) as connection:
         if scalars:

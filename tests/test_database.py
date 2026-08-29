@@ -48,8 +48,21 @@ class DatabaseTests(unittest.TestCase):
         with database.open_connection() as connection:
             version = connection.execute("PRAGMA user_version").fetchone()[0]
             clip_columns = {row["name"] for row in connection.execute("PRAGMA table_info(clips)")}
-        self.assertEqual(version, 2)
+            self.assertEqual(version, 3)
         self.assertNotIn("legacy_import_pending", clip_columns)
+
+    def test_schema_v2_adds_immich_asset_id_on_upgrade(self):
+        with database.open_connection() as connection:
+            database._migrate_to_v1(connection)
+            database._migrate_to_v2(connection)
+            connection.execute("PRAGMA user_version = 2")
+            connection.commit()
+
+        database.initialize_database()
+
+        with database.open_connection() as connection:
+            columns = {row["name"] for row in connection.execute("PRAGMA table_info(clips)")}
+        self.assertIn("immich_asset_id", columns)
 
     def test_environment_values_override_then_survive_removal(self):
         with patch.dict(os.environ, {"PLEX_URL": " http://plex:32400/ ", "PLEX_TOKEN": " first "}, clear=True):

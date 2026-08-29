@@ -154,7 +154,11 @@
     download.setAttribute('aria-label', 'Download clip');
     download.append(icon('download'), Object.assign(document.createElement('span'), {textContent: 'Download'}));
     actions.appendChild(download);
-    if (state.uploaders.length) actions.appendChild(actionButton('Upload', 'share-square', '', () => openUpload(clip)));
+    if (clip.immich_asset_url) {
+      actions.appendChild(actionButton('Open in Immich', 'external-link-alt', '', () => openImmichAsset(clip)));
+    }
+    const immichOnlyWithAsset = state.uploaders.length === 1 && state.uploaders[0].id === 'immich' && clip.immich_asset_id;
+    if (state.uploaders.length && !immichOnlyWithAsset) actions.appendChild(actionButton('Upload', 'share-square', '', () => openUpload(clip)));
     actions.appendChild(actionButton('Delete', 'trash-alt', 'danger-action', () => openDelete(clip)));
     content.append(header, meta, actions);
     card.append(preview, content);
@@ -232,6 +236,45 @@
     window.setTimeout(() => { if (alert.isConnected) alert.remove(); }, 5000);
   }
 
+  async function openImmichAsset(clip) {
+    const pendingWindow = window.open('', '_blank');
+    if (pendingWindow) pendingWindow.opener = null;
+    try {
+      const response = await fetch('/api/immich/assets/check', {
+        method: 'POST',
+        headers: {'Content-Type': 'application/json'},
+        body: JSON.stringify({file_path: clip.file_path}),
+      });
+      const result = await response.json();
+      if (!response.ok) {
+        if (response.status === 404 && result.result === 'not_found') {
+          if (pendingWindow) pendingWindow.close();
+          notice(result.message || "This asset can't be found in Immich.", 'warning');
+          try { await refreshClips(); }
+          catch (error) { notice(`${result.message} The library could not refresh: ${error.message}`, 'warning'); }
+          return;
+        }
+        throw new Error(result.message || 'The Immich asset could not be verified.');
+      }
+      if (pendingWindow) pendingWindow.location.replace(result.url);
+      else notice('The Immich asset exists, but the browser blocked the new tab.', 'warning');
+    } catch (error) {
+      if (pendingWindow) pendingWindow.close();
+      notice(error.message, 'danger');
+    }
+  }
+
+  function immichJobWarning(result) {
+    if (!result) return '';
+    if (result.immich_auto_upload_warning) return result.immich_auto_upload_warning;
+    const automatic = result.immich_auto_upload;
+    if (automatic?.warning) return automatic.warning;
+    return (automatic?.upload?.failures || []).map(failure => {
+      const step = failure.step === 'description' ? 'description update' : failure.step || 'metadata update';
+      return `Immich ${step} failed: ${failure.message || 'Unknown error.'}`;
+    }).join('; ');
+  }
+
   async function refreshClips() {
     const request = ++refreshRequest;
     const sort = state.sort;
@@ -298,7 +341,7 @@
       const result = await response.json();
       if (!response.ok) throw new Error(result.message || 'Clip details could not be saved.');
       bootstrap.Modal.getInstance(byId('edit_clip_modal')).hide();
-      notice('Clip details saved.');
+      notice(result.warning || 'Clip details saved.', result.warning ? 'warning' : 'success');
       try { await refreshClips(); }
       catch (error) { notice(`Clip details were saved, but the library could not refresh: ${error.message}`, 'warning'); }
     } catch (error) {
@@ -314,6 +357,8 @@
     window.clearTimeout(state.deleteTimer);
     byId('delete_clip_message').textContent = `Delete “${clip.clip_title || clip.display_heading}”?`;
     byId('delete_clip_error').classList.add('d-none');
+    byId('delete_immich_option').classList.toggle('d-none', !(clip.immich_asset_id && clip.immich_can_delete));
+    byId('delete_immich_asset').checked = false;
     const confirm = byId('confirm_delete_clip');
     confirm.disabled = true;
     confirm.textContent = 'Delete in 1…';
@@ -333,7 +378,7 @@
     button.disabled = true;
     button.textContent = 'Deleting…';
     try {
-      const response = await fetch('/api/clips', {method: 'DELETE', headers: {'Content-Type': 'application/json'}, body: JSON.stringify({file_path: path})});
+      const response = await fetch('/api/clips', {method: 'DELETE', headers: {'Content-Type': 'application/json'}, body: JSON.stringify({file_path: path, delete_immich_asset: byId('delete_immich_asset').checked})});
       const result = await response.json();
       if (!response.ok) throw new Error(result.message || 'The clip could not be deleted.');
       state.deletingPath = null;
@@ -390,6 +435,7 @@
     state.uploaders.forEach(uploader => select.add(new Option(uploader.label, uploader.id)));
     byId('library_new_tags').value = '';
     byId('library_new_album').value = '';
+    byId('library_apply_auto_tags').checked = false;
     updateUploadOptions();
     bootstrap.Modal.getOrCreateInstance(byId('upload_clip_modal')).show();
   }
@@ -405,13 +451,24 @@
       payload.album_ids = selectedValues('library_immich_albums');
       payload.tag_names = byId('library_new_tags').value.split(',').map(value => value.trim()).filter(Boolean);
       payload.new_album_name = byId('library_new_album').value.trim();
+      payload.apply_auto_tags = byId('library_apply_auto_tags').checked;
     }
     try {
       const response = await fetch('/api/uploads', {method: 'POST', headers: {'Content-Type': 'application/json'}, body: JSON.stringify(payload)});
       const result = await response.json();
       if (!response.ok && response.status !== 207) throw new Error(result.message || 'Upload failed.');
       bootstrap.Modal.getInstance(byId('upload_clip_modal')).hide();
-      notice(response.status === 207 ? 'Clip uploaded, but some organization steps failed.' : 'Clip uploaded successfully.', response.status === 207 ? 'warning' : 'success');
+      const warning = response.status === 207
+        ? (result.failures || []).map(failure => {
+            const step = failure.step === 'description' ? 'description update' : failure.step || 'metadata update';
+            return `Immich ${step} failed: ${failure.message || 'Unknown error.'}`;
+          }).join('; ') || 'Clip uploaded, but some organization steps failed.'
+        : '';
+      notice(warning || 'Clip uploaded successfully.', warning ? 'warning' : 'success');
+      if (service === 'immich' && result.asset_id) {
+        try { await refreshClips(); }
+        catch (error) { notice(`The clip was uploaded, but the library could not refresh: ${error.message}`, 'warning'); }
+      }
     } catch (error) {
       byId('library_upload_status').innerHTML = '<div class="alert alert-danger"></div>';
       byId('library_upload_status').querySelector('.alert').textContent = error.message;
@@ -515,7 +572,8 @@
   document.addEventListener('clipplex:clip-saved', async event => {
     const result = event.detail || {};
     if (!result.clip) return;
-    notice(result.operation === 'replace' ? 'Clip replaced.' : 'Trimmed copy saved.');
+    const warning = immichJobWarning(result);
+    notice(warning || (result.operation === 'replace' ? 'Clip replaced.' : 'Trimmed copy saved.'), warning ? 'warning' : 'success');
     try { await refreshClips(); }
     catch (error) { notice(`The clip was saved, but the library could not refresh: ${error.message}`, 'warning'); }
   });

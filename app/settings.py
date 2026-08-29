@@ -12,48 +12,147 @@ class SettingsError(ValueError):
         self.status_code = status_code
 
 
+IMMICH_REQUIRED_PERMISSIONS = (
+    "asset.upload",
+    "asset.update",
+    "asset.read",
+    "tag.read",
+    "tag.create",
+    "tag.asset",
+    "album.read",
+    "album.create",
+    "albumAsset.create",
+)
+IMMICH_OPTIONAL_PERMISSIONS = {
+    "asset.delete": "Used only when Manage Immich clips after upload is enabled.",
+}
+
+
 SETTING_DEFINITIONS = {
     "plex_url": {
-        "environment": "PLEX_URL", "secret": False, "section": "plex",
-        "label": "Plex URL", "help": "The base URL of your Plex Media Server.", "kind": "url",
+        "environment": "PLEX_URL",
+        "secret": False,
+        "section": "plex",
+        "label": "Plex URL",
+        "help": "The base URL of your Plex Media Server.",
+        "kind": "url",
     },
     "plex_token": {
-        "environment": "PLEX_TOKEN", "secret": True, "section": "plex",
-        "label": "Plex token", "help": "Authentication token used to access Plex.", "kind": "password",
+        "environment": "PLEX_TOKEN",
+        "secret": True,
+        "section": "plex",
+        "label": "Plex token",
+        "help": "Authentication token used to access Plex.",
+        "kind": "password",
         "help_url": "https://support.plex.tv/articles/204059436-finding-an-authentication-token-x-plex-token/",
         "help_link_label": "How do I find this?",
     },
     "streamable_login": {
-        "environment": "STREAMABLE_LOGIN", "secret": False, "section": "streamable",
-        "label": "Streamable email", "help": "Account email used for Streamable uploads.", "kind": "email",
+        "environment": "STREAMABLE_LOGIN",
+        "secret": False,
+        "section": "streamable",
+        "label": "Streamable email",
+        "help": "Account email used for Streamable uploads.",
+        "kind": "email",
     },
     "streamable_password": {
-        "environment": "STREAMABLE_PASSWORD", "secret": True, "section": "streamable",
-        "label": "Streamable password", "help": "Password used for Streamable uploads.", "kind": "password",
+        "environment": "STREAMABLE_PASSWORD",
+        "secret": True,
+        "section": "streamable",
+        "label": "Streamable password",
+        "help": "Password used for Streamable uploads.",
+        "kind": "password",
     },
     "immich_url": {
-        "environment": "IMMICH_URL", "secret": False, "section": "immich",
-        "label": "Immich URL", "help": "The base URL of your Immich server.", "kind": "url",
+        "environment": "IMMICH_URL",
+        "secret": False,
+        "section": "immich",
+        "label": "Immich URL",
+        "help": "The base URL of your Immich server.",
+        "kind": "url",
     },
     "immich_api_key": {
-        "environment": "IMMICH_API_KEY", "secret": True, "section": "immich",
-        "label": "Immich API key", "help": "API key used for Immich uploads.", "kind": "password",
-        "permissions": ["asset.upload", "tag.read", "tag.create", "tag.asset", "album.read", "album.create", "albumAsset.create"],
+        "environment": "IMMICH_API_KEY",
+        "secret": True,
+        "section": "immich",
+        "label": "Immich API key",
+        "help": "API key used for Immich uploads.",
+        "kind": "password",
+        "permissions": [
+            *IMMICH_REQUIRED_PERMISSIONS,
+            "asset.delete (only if 'Manage Immich clips after upload' is enabled)",
+        ],
     },
     "immich_default_tag": {
-        "environment": "IMMICH_DEFAULT_TAG", "secret": False, "section": "immich",
-        "label": "Default Immich tag", "help": "Optional tag added to every Immich upload.", "kind": "text",
+        "environment": "IMMICH_DEFAULT_TAG",
+        "secret": False,
+        "section": "immich",
+        "label": "Default Immich tag",
+        "help": "Optional tag added to every Immich upload.",
+        "kind": "text",
+    },
+    "immich_auto_upload": {
+        "environment": None,
+        "secret": False,
+        "section": "immich",
+        "label": "Auto upload new clips",
+        "help": "Upload newly created and replacement clips to Immich.",
+        "kind": "checkbox",
+    },
+    "immich_manage_assets": {
+        "environment": None,
+        "secret": False,
+        "section": "immich",
+        "label": "Manage Immich clips after upload",
+        "help": "Allow Clipplex to delete linked Immich assets during replacement or deletion.",
+        "kind": "checkbox",
+    },
+    "immich_auto_tag_library": {
+        "environment": None,
+        "secret": False,
+        "section": "immich",
+        "group": "Auto-Tag:",
+        "label": "Media Library Name",
+        "help": "Use the Plex library as an automatic tag.",
+        "kind": "checkbox",
+    },
+    "immich_auto_tag_title": {
+        "environment": None,
+        "secret": False,
+        "section": "immich",
+        "group": "Auto-Tag:",
+        "label": "Show/Movie Name",
+        "help": "Use the show or movie name as an automatic tag.",
+        "kind": "checkbox",
+    },
+    "immich_auto_tag_episode": {
+        "environment": None,
+        "secret": False,
+        "section": "immich",
+        "group": "Auto-Tag:",
+        "label": "Episode Title (S##E##)",
+        "help": "Use S##E## as an automatic tag for episodes.",
+        "kind": "checkbox",
     },
     "ffmpeg_preset": {
-        "environment": "FFMPEG_PRESET", "secret": False, "section": "encoding",
-        "label": "FFmpeg preset", "help": "Encoding speed/quality preset used for new clips.", "kind": "select",
+        "environment": "FFMPEG_PRESET",
+        "secret": False,
+        "section": "encoding",
+        "label": "FFmpeg preset",
+        "help": "Encoding speed/quality preset used for new clips.",
+        "kind": "select",
     },
     "flask_secret_key": {"environment": "CLIPPLEX_SECRET_KEY", "secret": True},
 }
 
-UI_SETTING_KEYS = tuple(key for key, definition in SETTING_DEFINITIONS.items() if "section" in definition)
+UI_SETTING_KEYS = tuple(
+    key for key, definition in SETTING_DEFINITIONS.items() if "section" in definition
+)
 SECTION_LABELS = {
-    "plex": "Plex", "streamable": "Streamable", "immich": "Immich", "encoding": "Encoding",
+    "plex": "Plex",
+    "streamable": "Streamable",
+    "immich": "Immich",
+    "encoding": "Encoding",
 }
 MAX_SETTING_LENGTH = 4096
 
@@ -62,13 +161,41 @@ def initialize_settings() -> None:
     database.initialize_database()
     with database.transaction(immediate=True) as connection:
         for key, definition in SETTING_DEFINITIONS.items():
-            value = (os.environ.get(definition["environment"]) or "").strip()
+            value = (
+                (os.environ.get(definition["environment"]) or "").strip()
+                if definition.get("environment")
+                else ""
+            )
             if value:
                 _upsert(connection, key, value, definition["secret"])
-        if connection.execute("SELECT 1 FROM settings WHERE key = 'ffmpeg_preset'").fetchone() is None:
+        if (
+            connection.execute(
+                "SELECT 1 FROM settings WHERE key = 'ffmpeg_preset'"
+            ).fetchone()
+            is None
+        ):
             _upsert(connection, "ffmpeg_preset", "veryfast", False)
-        if connection.execute("SELECT 1 FROM settings WHERE key = 'flask_secret_key'").fetchone() is None:
+        if (
+            connection.execute(
+                "SELECT 1 FROM settings WHERE key = 'flask_secret_key'"
+            ).fetchone()
+            is None
+        ):
             _upsert(connection, "flask_secret_key", secrets.token_urlsafe(48), True)
+        for key in (
+            "immich_auto_upload",
+            "immich_manage_assets",
+            "immich_auto_tag_library",
+            "immich_auto_tag_title",
+            "immich_auto_tag_episode",
+        ):
+            if (
+                connection.execute(
+                    "SELECT 1 FROM settings WHERE key = ?", (key,)
+                ).fetchone()
+                is None
+            ):
+                _upsert(connection, key, "false", False)
 
 
 def _upsert(connection, key: str, value: str, is_secret: bool) -> None:
@@ -90,20 +217,29 @@ def get(key: str, default: str = "") -> str:
         raise KeyError(f"Unknown Clipplex setting: {key}")
     database.initialize_database()
     definition = SETTING_DEFINITIONS[key]
-    environment_value = (os.environ.get(definition["environment"]) or "").strip()
+    environment_value = (
+        (os.environ.get(definition["environment"]) or "").strip()
+        if definition.get("environment")
+        else ""
+    )
     if environment_value:
         with database.transaction(immediate=True) as connection:
-            row = connection.execute("SELECT value FROM settings WHERE key = ?", (key,)).fetchone()
+            row = connection.execute(
+                "SELECT value FROM settings WHERE key = ?", (key,)
+            ).fetchone()
             if row is None or row["value"] != environment_value:
                 _upsert(connection, key, environment_value, definition["secret"])
         return environment_value
     with database.open_connection() as connection:
-        row = connection.execute("SELECT value FROM settings WHERE key = ?", (key,)).fetchone()
+        row = connection.execute(
+            "SELECT value FROM settings WHERE key = ?", (key,)
+        ).fetchone()
     return row["value"] if row is not None else default
 
 
 def _environment_value(key: str) -> str:
-    return (os.environ.get(SETTING_DEFINITIONS[key]["environment"]) or "").strip()
+    environment = SETTING_DEFINITIONS[key].get("environment")
+    return (os.environ.get(environment) or "").strip() if environment else ""
 
 
 def _validate_url(key: str, value: str) -> None:
@@ -118,19 +254,31 @@ def _validate_url(key: str, value: str) -> None:
         or parsed.query
         or parsed.fragment
     ):
-        raise SettingsError(f"{SETTING_DEFINITIONS[key]['label']} must be a complete HTTP(S) URL.")
+        raise SettingsError(
+            f"{SETTING_DEFINITIONS[key]['label']} must be a complete HTTP(S) URL."
+        )
 
 
 def _validate_value(key: str, value: str) -> str:
     cleaned = value.strip()
     if len(cleaned) > MAX_SETTING_LENGTH:
-        raise SettingsError(f"{SETTING_DEFINITIONS[key]['label']} must contain at most {MAX_SETTING_LENGTH} characters.")
+        raise SettingsError(
+            f"{SETTING_DEFINITIONS[key]['label']} must contain at most {MAX_SETTING_LENGTH} characters."
+        )
     if SETTING_DEFINITIONS[key].get("kind") == "url":
         _validate_url(key, cleaned)
     if key == "ffmpeg_preset":
         from clipplexAPI import X264_PRESETS
+
         if cleaned not in X264_PRESETS:
             raise SettingsError("Select a supported FFmpeg preset.")
+    if SETTING_DEFINITIONS[key].get("kind") == "checkbox" and cleaned not in {
+        "true",
+        "false",
+    }:
+        raise SettingsError(
+            f"{SETTING_DEFINITIONS[key]['label']} must be enabled or disabled."
+        )
     return cleaned
 
 
@@ -153,19 +301,24 @@ def _ui_field(key: str) -> dict:
         field["value"] = get(key)
     if key == "ffmpeg_preset":
         from clipplexAPI import X264_PRESETS
+
         field["options"] = sorted(X264_PRESETS)
     if "permissions" in definition:
         field["permissions"] = definition["permissions"]
     if "help_url" in definition:
         field["help_url"] = definition["help_url"]
         field["help_link_label"] = definition["help_link_label"]
+    if "group" in definition:
+        field["group"] = definition["group"]
     return field
 
 
 def ui_settings() -> dict:
     """Return display-safe persisted-settings data for the management UI."""
     return {
-        "sections": [{"id": key, "label": label} for key, label in SECTION_LABELS.items()],
+        "sections": [
+            {"id": key, "label": label} for key, label in SECTION_LABELS.items()
+        ],
         "fields": [_ui_field(key) for key in UI_SETTING_KEYS],
     }
 
@@ -176,14 +329,18 @@ def update_ui_settings(values, clear_keys=None) -> dict:
         raise SettingsError("Settings values must be an object.")
     if clear_keys is None:
         clear_keys = []
-    if not isinstance(clear_keys, list) or not all(isinstance(key, str) for key in clear_keys):
+    if not isinstance(clear_keys, list) or not all(
+        isinstance(key, str) for key in clear_keys
+    ):
         raise SettingsError("Settings to clear must be a list of field names.")
     supplied = set(values) | set(clear_keys)
     unknown = supplied - set(UI_SETTING_KEYS)
     if unknown:
         raise SettingsError("Unknown setting: " + sorted(unknown)[0])
     if set(values) & set(clear_keys):
-        raise SettingsError("A setting cannot be updated and cleared in the same request.")
+        raise SettingsError(
+            "A setting cannot be updated and cleared in the same request."
+        )
     for key in supplied:
         if _environment_value(key):
             raise SettingsError(
@@ -196,6 +353,8 @@ def update_ui_settings(values, clear_keys=None) -> dict:
             raise SettingsError(f"{SETTING_DEFINITIONS[key]['label']} must be text.")
         cleaned_values[key] = _validate_value(key, value)
 
+    if cleaned_values.get("immich_auto_tag_title") == "false":
+        cleaned_values["immich_auto_tag_episode"] = "false"
     with database.transaction(immediate=True) as connection:
         for key, value in cleaned_values.items():
             _upsert(connection, key, value, SETTING_DEFINITIONS[key]["secret"])
@@ -203,7 +362,12 @@ def update_ui_settings(values, clear_keys=None) -> dict:
             connection.execute("DELETE FROM settings WHERE key = ?", (key,))
         # Plex remains required; require both values after applying this complete transaction.
         effective = {
-            key: (connection.execute("SELECT value FROM settings WHERE key = ?", (key,)).fetchone() or {"value": ""})["value"]
+            key: (
+                connection.execute(
+                    "SELECT value FROM settings WHERE key = ?", (key,)
+                ).fetchone()
+                or {"value": ""}
+            )["value"]
             for key in ("plex_url", "plex_token")
         }
         if not all(effective.values()):
@@ -215,40 +379,101 @@ def test_service(service: str) -> dict:
     """Exercise saved service credentials without returning sensitive data."""
     if service == "plex":
         if not get("plex_url") or not get("plex_token"):
-            raise SettingsError("Plex URL and Plex token must be configured before testing.")
+            raise SettingsError(
+                "Plex URL and Plex token must be configured before testing."
+            )
         try:
             from clipplexAPI import PlexSessions
+
             PlexSessions().request_xml("/")
         except Exception as error:
-            raise SettingsError("Could not connect to Plex with the saved URL and token.", 502) from error
+            raise SettingsError(
+                "Could not connect to Plex with the saved URL and token.", 502
+            ) from error
         return {"service": service, "ok": True, "message": "Connected to Plex."}
     if service == "streamable":
         login, password = get("streamable_login"), get("streamable_password")
         if not login or not password:
-            raise SettingsError("Streamable email and password must be configured before testing.")
+            raise SettingsError(
+                "Streamable email and password must be configured before testing."
+            )
         try:
             import requests
-            response = requests.get("https://api.streamable.com/users/me", auth=(login, password), timeout=(5, 15))
+
+            response = requests.get(
+                "https://api.streamable.com/users/me",
+                auth=(login, password),
+                timeout=(5, 15),
+            )
             response.raise_for_status()
         except Exception as error:
-            raise SettingsError("Could not connect to Streamable with the saved credentials.", 502) from error
+            raise SettingsError(
+                "Could not connect to Streamable with the saved credentials.", 502
+            ) from error
         return {"service": service, "ok": True, "message": "Connected to Streamable."}
     if service == "immich":
         if not get("immich_url") or not get("immich_api_key"):
-            raise SettingsError("Immich URL and API key must be configured before testing.")
+            raise SettingsError(
+                "Immich URL and API key must be configured before testing."
+            )
         try:
             from app.uploaders import ImmichUploader
-            ImmichUploader().get_tags()
+
+            key = ImmichUploader().get_api_key()
         except Exception as error:
-            raise SettingsError("Could not connect to Immich with the saved URL and API key.", 502) from error
-        return {"service": service, "ok": True, "message": "Connected to Immich."}
+            raise SettingsError(
+                "Could not connect to Immich with the saved URL and API key.", 502
+            ) from error
+        granted = set(key["permissions"])
+        grants_all = "all" in granted
+        needed_present = [
+            permission
+            for permission in IMMICH_REQUIRED_PERMISSIONS
+            if grants_all or permission in granted
+        ]
+        needed_missing = [
+            permission
+            for permission in IMMICH_REQUIRED_PERMISSIONS
+            if not grants_all and permission not in granted
+        ]
+        optional = [
+            {
+                "permission": permission,
+                "present": grants_all or permission in granted,
+                "description": description,
+            }
+            for permission, description in IMMICH_OPTIONAL_PERMISSIONS.items()
+        ]
+        recognized = set(IMMICH_REQUIRED_PERMISSIONS) | set(IMMICH_OPTIONAL_PERMISSIONS)
+        present_unused = sorted(granted - recognized)
+        return {
+            "service": service,
+            "ok": True,
+            "message": (
+                "Connected to Immich."
+                if not needed_missing
+                else "Connected to Immich, but required permissions are missing."
+            ),
+            "api_key_name": key["name"],
+            "permission_groups": {
+                "needed_present": needed_present,
+                "needed_missing": needed_missing,
+                "optional": optional,
+                "present_unused": present_unused,
+            },
+        }
     raise SettingsError("Select a supported service to test.")
 
 
 def require_plex_settings() -> None:
-    missing = [label for key, label in (("plex_url", "PLEX_URL"), ("plex_token", "PLEX_TOKEN")) if not get(key)]
+    missing = [
+        label
+        for key, label in (("plex_url", "PLEX_URL"), ("plex_token", "PLEX_TOKEN"))
+        if not get(key)
+    ]
     if missing:
         raise RuntimeError(
-            "Missing required Plex configuration: " + ", ".join(missing)
+            "Missing required Plex configuration: "
+            + ", ".join(missing)
             + ". Supply it once through the environment so Clipplex can store it in SQLite."
         )

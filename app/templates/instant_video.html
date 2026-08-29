@@ -50,7 +50,7 @@
   <div class="modal-dialog modal-dialog-centered">
     <div class="modal-content">
       <div class="modal-header"><h2 class="modal-title h5" id="latest_delete_title">Delete clip?</h2><button type="button" class="btn-close btn-close-white" data-bs-dismiss="modal" aria-label="Close"></button></div>
-      <div class="modal-body"><p id="latest_delete_message" class="mb-2"></p><p class="small text-muted mb-0">The video and its cached GIF cannot be recovered.</p><div id="latest_delete_error" class="alert alert-danger d-none mt-3 mb-0" role="alert"></div></div>
+      <div class="modal-body"><p id="latest_delete_message" class="mb-2"></p><p class="small text-muted mb-0">The video and its cached GIF cannot be recovered.</p><div id="latest_delete_immich_option" class="form-check mt-3 d-none"><input id="latest_delete_immich_asset" class="form-check-input" type="checkbox"><label class="form-check-label" for="latest_delete_immich_asset">Also delete the associated Immich asset</label></div><div id="latest_delete_error" class="alert alert-danger d-none mt-3 mb-0" role="alert"></div></div>
       <div class="modal-footer"><button id="latest_cancel_delete" type="button" class="btn btn-secondary" data-bs-dismiss="modal">Cancel</button><button id="latest_confirm_delete" type="button" class="btn btn-danger" disabled>Delete in 1…</button></div>
     </div>
   </div>
@@ -99,6 +99,10 @@
             <div class="mt-3">
               <label for="immich_new_album" class="form-label">Create one new album</label>
               <input id="immich_new_album" class="form-control" maxlength="255" placeholder="Optional album name">
+            </div>
+            <div class="form-check mt-3">
+              <input id="immich_apply_auto_tags" class="form-check-input" type="checkbox">
+              <label class="form-check-label" for="immich_apply_auto_tags">Apply configured hierarchical tags</label>
             </div>
           </div>
         </div>
@@ -222,8 +226,8 @@
                 <button type="button" class="btn btn-outline-secondary extend-clip" data-clip='{{ video|tojson }}' title="Extend from original" aria-label="Extend from original"><i class="fas fa-expand-alt" aria-hidden="true"></i></button>
                 <button type="button" class="btn btn-outline-success gif-export" data-file='{{ video["file_path"]|tojson }}' title="Export GIF" aria-label="Export GIF"><span class="gif-mark" aria-hidden="true">GIF</span></button>
                 <a class="btn btn-outline-primary" href="{{ video['file_path'] }}" download title="Download"><i class="fas fa-download"></i></a>
-                <button type="button" class="btn btn-outline-danger remove-clip" data-file='{{ video["file_path"]|tojson }}' data-heading='{{ (video.get("clip_title") or video.get("display_heading") or video.get("show") or video.get("title") or "Clip")|tojson }}' title="Delete"><i class="fas fa-trash-alt"></i></button>
-                <button type="button" class="btn btn-outline-secondary clip-upload d-none" data-file='{{ video["file_path"]|tojson }}' title="Upload clip"><i class="fas fa-share-square"></i></button>
+                <button type="button" class="btn btn-outline-danger remove-clip" data-file='{{ video["file_path"]|tojson }}' data-heading='{{ (video.get("clip_title") or video.get("display_heading") or video.get("show") or video.get("title") or "Clip")|tojson }}' data-immich-can-delete="{{ 'true' if video.get('immich_asset_id') and video.get('immich_can_delete') else 'false' }}" title="Delete"><i class="fas fa-trash-alt"></i></button>
+                <button type="button" class="btn btn-outline-secondary clip-upload d-none" data-file='{{ video["file_path"]|tojson }}' data-immich-asset-id="{{ video.get('immich_asset_id') or '' }}" title="Upload clip"><i class="fas fa-share-square"></i></button>
               </div>
             </div>
           </div>
@@ -266,7 +270,28 @@
   let immichOptionsReady = false;
   let newImmichTags = [];
   let pendingDeletePath = null;
+  let pendingDeleteImmich = false;
   let deleteActivationTimer = null;
+
+  function showInfoNotice(message, style = 'success') {
+    info.replaceChildren();
+    const alert = document.createElement('div');
+    alert.className = 'alert alert-' + style;
+    alert.textContent = message;
+    info.appendChild(alert);
+  }
+
+  function immichJobWarning(result) {
+    if (!result) return '';
+    if (result.immich_auto_upload_warning) return result.immich_auto_upload_warning;
+    const automatic = result.immich_auto_upload;
+    if (automatic?.warning) return automatic.warning;
+    const failures = automatic?.upload?.failures || [];
+    return failures.map(failure => {
+      const step = failure.step === 'description' ? 'description update' : failure.step || 'metadata update';
+      return `Immich ${step} failed: ${failure.message || 'Unknown error.'}`;
+    }).join('; ');
+  }
 
   function formatTimestamp(milliseconds) {
     const value = Math.max(0, Number(milliseconds) || 0);
@@ -707,7 +732,8 @@
           downloadGif(gifExport);
         } else {
           if (clip) prependClipCard(clip);
-          info.innerHTML = '<div class="alert alert-success">Clip created.</div>';
+          const warning = immichJobWarning(job.result);
+          showInfoNotice(warning || 'Clip created.', warning ? 'warning' : 'success');
         }
       } else if (job.status === 'recovery_required') {
         const recovery = job.error || {};
@@ -873,6 +899,7 @@
     remove.className = 'btn btn-outline-danger remove-clip';
     remove.dataset.file = JSON.stringify(clip.file_path);
     remove.dataset.heading = JSON.stringify(clipHeading(clip));
+    remove.dataset.immichCanDelete = String(Boolean(clip.immich_asset_id && clip.immich_can_delete));
     remove.title = 'Delete';
     remove.setAttribute('aria-label', 'Delete clip');
     remove.innerHTML = '<i class="fas fa-trash-alt" aria-hidden="true"></i>';
@@ -880,6 +907,7 @@
     upload.type = 'button';
     upload.className = 'btn btn-outline-secondary clip-upload d-none';
     upload.dataset.file = JSON.stringify(clip.file_path);
+    upload.dataset.immichAssetId = clip.immich_asset_id || '';
     upload.title = 'Upload clip';
     upload.setAttribute('aria-label', 'Upload clip');
     upload.innerHTML = '<i class="fas fa-share-square" aria-hidden="true"></i>';
@@ -911,8 +939,9 @@
   function configureUploaderButtons(root = document) {
     root.querySelectorAll('.clip-upload').forEach(button => {
       const available = uploaderConfigurations.length > 0;
-      button.classList.toggle('d-none', !available);
       const onlyUploader = uploaderConfigurations.length === 1 ? uploaderConfigurations[0] : null;
+      const immichOnlyWithAsset = onlyUploader?.id === 'immich' && Boolean(button.dataset.immichAssetId);
+      button.classList.toggle('d-none', !available || immichOnlyWithAsset);
       const label = onlyUploader ? 'Upload to ' + onlyUploader.label : 'Upload clip';
       button.title = label;
       button.setAttribute('aria-label', label);
@@ -989,6 +1018,7 @@
     document.getElementById('immich_album_filter').value = '';
     document.getElementById('immich_new_tag').value = '';
     document.getElementById('immich_new_album').value = '';
+    document.getElementById('immich_apply_auto_tags').checked = false;
     document.getElementById('immich_tag_ids').replaceChildren();
     document.getElementById('immich_album_ids').replaceChildren();
     document.getElementById('immich_options_loading').textContent = 'Loading Immich tags and albums…';
@@ -1067,7 +1097,8 @@
       list.className = 'mb-0 mt-2';
       payload.failures.forEach(failure => {
         const item = document.createElement('li');
-        item.textContent = failure.message || 'A metadata step failed.';
+        const step = failure.step === 'description' ? 'Description update' : failure.step;
+        item.textContent = step ? `${step}: ${failure.message || 'Failed.'}` : (failure.message || 'A metadata step failed.');
         list.appendChild(item);
       });
       alert.appendChild(list);
@@ -1099,6 +1130,14 @@
       if (!response.ok) {
         showUploadNotice(statusTarget, payload, true);
         return;
+      }
+      if (payload.uploader === 'immich' && payload.asset_id) {
+        document.querySelectorAll('.clip-upload').forEach(button => {
+          try {
+            if (JSON.parse(button.dataset.file) === file) button.dataset.immichAssetId = payload.asset_id;
+          } catch (_) {}
+        });
+        configureUploaderButtons(document);
       }
       if (fromDialog) bootstrap.Modal.getOrCreateInstance(document.getElementById('upload_modal')).hide();
       showUploadNotice(info, payload, false);
@@ -1219,7 +1258,7 @@
       const result = await response.json();
       if (!response.ok) throw new Error(result.message || 'The clip title could not be saved.');
       prependClipCard(result.clip);
-      info.innerHTML = '<div class="alert alert-success">Clip title saved.</div>';
+      showInfoNotice(result.warning || 'Clip title saved.', result.warning ? 'warning' : 'success');
     } catch (error) {
       input.setCustomValidity(error.message);
       input.reportValidity();
@@ -1247,10 +1286,13 @@
 
   function openLatestDelete(button) {
     pendingDeletePath = JSON.parse(button.dataset.file);
+    pendingDeleteImmich = button.dataset.immichCanDelete === 'true';
     const heading = button.dataset.heading ? JSON.parse(button.dataset.heading) : 'this clip';
     window.clearTimeout(deleteActivationTimer);
     document.getElementById('latest_delete_message').textContent = 'Delete “' + heading + '”?';
     document.getElementById('latest_delete_error').classList.add('d-none');
+    document.getElementById('latest_delete_immich_option').classList.toggle('d-none', !pendingDeleteImmich);
+    document.getElementById('latest_delete_immich_asset').checked = false;
     const confirm = document.getElementById('latest_confirm_delete');
     confirm.disabled = true;
     confirm.textContent = 'Delete in 1…';
@@ -1271,7 +1313,7 @@
     button.textContent = 'Deleting…';
     try {
       const response = await fetch('/api/clips', {
-        method: 'DELETE', headers: {'Content-Type': 'application/json'}, body: JSON.stringify({file_path: path})
+        method: 'DELETE', headers: {'Content-Type': 'application/json'}, body: JSON.stringify({file_path: path, delete_immich_asset: pendingDeleteImmich && document.getElementById('latest_delete_immich_asset').checked})
       });
       const result = await response.json();
       if (!response.ok) throw new Error(result.message || 'The clip could not be deleted.');
@@ -1384,7 +1426,8 @@
       tag_ids: selectedOptionValues('immich_tag_ids'),
       tag_names: newImmichTags,
       album_ids: selectedOptionValues('immich_album_ids'),
-      new_album_name: document.getElementById('immich_new_album').value.trim()
+      new_album_name: document.getElementById('immich_new_album').value.trim(),
+      apply_auto_tags: document.getElementById('immich_apply_auto_tags').checked
     } : {};
     performUpload(currentUploadFile, uploaderId, metadata, true);
   });
@@ -1393,12 +1436,15 @@
   document.getElementById('latest_delete_modal').addEventListener('hidden.bs.modal', () => {
     window.clearTimeout(deleteActivationTimer);
     pendingDeletePath = null;
+    pendingDeleteImmich = false;
   });
   document.addEventListener('clipplex:clip-saved', event => {
     const result = event.detail || {};
     if (!result.clip) return;
     prependClipCard(result.clip);
-    info.innerHTML = '<div class="alert alert-success">' + (result.operation === 'replace' ? 'Clip replaced.' : 'Trimmed copy saved.') + '</div>';
+    const warning = immichJobWarning(result);
+    const success = result.operation === 'replace' ? 'Clip replaced.' : 'Trimmed copy saved.';
+    showInfoNotice(warning || success, warning ? 'warning' : 'success');
   });
   bindClipActions(document);
   loadUploaderConfiguration();

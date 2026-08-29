@@ -13,10 +13,11 @@ REQUEST_TIMEOUT = (15, 300)
 
 
 class UploadError(Exception):
-    def __init__(self, message: str, status_code: int = 502):
+    def __init__(self, message: str, status_code: int = 502, upstream_status: int = None):
         super().__init__(message)
         self.message = message
         self.status_code = status_code
+        self.upstream_status = upstream_status
 
 
 def _setting(name: str) -> str:
@@ -46,6 +47,15 @@ def configured_uploaders() -> list[dict]:
 
 def configured_uploader_ids() -> set[str]:
     return {uploader["id"] for uploader in configured_uploaders()}
+
+
+def immich_asset_url(asset_id: str) -> str:
+    """Return a browser URL without requiring upload credentials."""
+    configured_url = _setting("immich_url").rstrip("/")
+    if not asset_id or not configured_url:
+        return ""
+    web_url = configured_url[:-4].rstrip("/") if configured_url.lower().endswith("/api") else configured_url
+    return f"{web_url}/photos/{asset_id}"
 
 
 def resolve_clip_path(file_path: str) -> Path:
@@ -119,7 +129,11 @@ class ImmichUploader:
         except requests.RequestException as error:
             response = getattr(error, "response", None)
             reason = _response_message(response) if response is not None else str(error)
-            raise UploadError(f"Immich request failed: {reason}") from error
+            upstream_status = response.status_code if response is not None else None
+            raise UploadError(
+                f"Immich request failed: {reason}",
+                upstream_status=upstream_status,
+            ) from error
         except ValueError as error:
             raise UploadError("Immich returned an invalid response.") from error
 
@@ -127,7 +141,7 @@ class ImmichUploader:
         payload = self._request("GET", "/tags") or []
         return sorted(
             [
-                {"id": item["id"], "name": item.get("value") or item.get("name") or ""}
+                {"id": item["id"], "name": item.get("value") or item.get("name") or "", "parent_id": item.get("parentId")}
                 for item in payload
                 if isinstance(item, dict) and item.get("id")
             ],
@@ -152,6 +166,21 @@ class ImmichUploader:
             "default_tag": self.default_tag or None,
         }
 
+    def get_api_key(self) -> dict:
+        payload = self._request("GET", "/api-keys/me")
+        permissions = payload.get("permissions") if isinstance(payload, dict) else None
+        if (
+            not isinstance(payload, dict)
+            or not isinstance(payload.get("name"), str)
+            or not isinstance(permissions, list)
+            or not all(isinstance(permission, str) for permission in permissions)
+        ):
+            raise UploadError("Immich returned an invalid API key response.")
+        return {
+            "name": payload["name"],
+            "permissions": sorted(set(permissions), key=str.casefold),
+        }
+
     def _upload_asset(self, clip_path: Path) -> dict:
         file_stat = clip_path.stat()
         created = datetime.fromtimestamp(file_stat.st_ctime, timezone.utc).isoformat()
@@ -170,6 +199,77 @@ class ImmichUploader:
         if not isinstance(payload, dict) or not payload.get("id"):
             raise UploadError("Immich did not return an asset ID for the uploaded clip.")
         return payload
+
+    def asset_url(self, asset_id: str) -> str:
+        return immich_asset_url(asset_id)
+
+    def get_asset(self, asset_id: str) -> dict:
+        payload = self._request("GET", f"/assets/{asset_id}")
+        if not isinstance(payload, dict) or payload.get("id") != asset_id:
+            raise UploadError("Immich returned an invalid asset response.")
+        return payload
+
+    def asset_exists(self, asset_id: str) -> bool:
+        try:
+            self.get_asset(asset_id)
+            return True
+        except UploadError as error:
+            ambiguous_missing = "not found or no asset.read access" in error.message.casefold()
+            missing = error.upstream_status == 404 or (
+                error.upstream_status == 400
+                and "asset not found" in error.message.casefold()
+            )
+            if missing:
+                return False
+            if ambiguous_missing:
+                key = self.get_api_key()
+                permissions = set(key["permissions"])
+                if "asset.read" in permissions or "all" in permissions:
+                    return False
+            raise
+
+    def _update_description(self, asset_id: str, title: str) -> None:
+        self._request("PUT", f"/assets/{asset_id}", json={"description": title})
+        asset = self.get_asset(asset_id)
+        exif_info = asset.get("exifInfo") if isinstance(asset.get("exifInfo"), dict) else {}
+        stored_description = exif_info.get("description", asset.get("description", ""))
+        if stored_description != title:
+            raise UploadError("Immich did not retain the clip title as the asset description.")
+
+    def delete_asset(self, asset_id: str) -> None:
+        if asset_id:
+            self._request("DELETE", "/assets", json={"ids": [asset_id], "force": True})
+
+    def _automatic_tag_parts(self, metadata: dict) -> list[str]:
+        parts = []
+        if _setting("immich_auto_tag_library") == "true" and metadata.get("media_library"):
+            parts.append(str(metadata["media_library"]).strip())
+        if _setting("immich_auto_tag_title") == "true":
+            value = metadata.get("show") if metadata.get("media_type") == "episode" else metadata.get("title")
+            if value:
+                parts.append(str(value).strip())
+        if _setting("immich_auto_tag_episode") == "true" and metadata.get("media_type") == "episode":
+            season, episode = str(metadata.get("season_number") or ""), str(metadata.get("episode_number") or "")
+            if season.isdigit() and episode.isdigit():
+                parts.append(f"S{int(season):02d}E{int(episode):02d}")
+        parts = _deduplicate(parts)
+        return parts
+
+    def _hierarchy_tag_ids(self, metadata: dict) -> list[str]:
+        parts = self._automatic_tag_parts(metadata)
+        if not parts:
+            return []
+        tags, parent_id = self.get_tags(), None
+        for part in parts:
+            matching = next((tag for tag in tags if tag.get("parent_id") == parent_id and tag["name"].rsplit("/", 1)[-1] == part), None)
+            if matching is None:
+                created = self._request("POST", "/tags", json={"name": part, **({"parentId": parent_id} if parent_id else {})})
+                if not isinstance(created, dict) or not created.get("id"):
+                    raise UploadError(f"Immich did not create the tag {part}.")
+                matching = {"id": created["id"], "name": created.get("value") or part, "parent_id": parent_id}
+                tags.append(matching)
+            parent_id = matching["id"]
+        return [parent_id]
 
     def _assign_tags(self, asset_id: str, tag_ids: list[str], tag_names: list[str]):
         requested_names = _deduplicate([*tag_names, self.default_tag])
@@ -205,12 +305,21 @@ class ImmichUploader:
         tag_names: list[str],
         album_ids: list[str],
         new_album_name: str,
+        clip_title: str = "",
+        auto_metadata: dict = None,
     ) -> tuple[dict, int]:
         uploaded = self._upload_asset(clip_path)
         asset_id = uploaded["id"]
         failures = []
+        if clip_title:
+            try:
+                self._update_description(asset_id, clip_title)
+            except UploadError as error:
+                failures.append({"step": "description", "message": error.message})
         try:
-            self._assign_tags(asset_id, tag_ids, tag_names)
+            auto_metadata = auto_metadata or {}
+            nested_auto_tags = self._hierarchy_tag_ids(auto_metadata) if auto_metadata else []
+            self._assign_tags(asset_id, [*tag_ids, *nested_auto_tags], tag_names)
         except UploadError as error:
             failures.append({"step": "tags", "message": error.message})
         for album_id in _deduplicate(album_ids):
@@ -229,7 +338,7 @@ class ImmichUploader:
             "uploader": "immich",
             "asset_id": asset_id,
             "upload_status": uploaded.get("status") or "created",
-            "url": f"{self.web_url}/photos/{asset_id}",
+            "url": self.asset_url(asset_id),
             "failures": failures,
         }
         return result, 207 if failures else 200
@@ -275,16 +384,21 @@ def upload_clip(
     tag_names: list[str] = None,
     album_ids: list[str] = None,
     new_album_name: str = "",
+    apply_auto_tags: bool = False,
 ) -> tuple[dict, int]:
     if uploader not in configured_uploader_ids():
         raise UploadError("The selected upload service is not configured.", 400)
     clip_path = resolve_clip_path(file_path)
     if uploader == "streamable":
         return streamable_upload(clip_path)
+    from app import clip_library
+    metadata = clip_library.describe_clip(file_path)
     return ImmichUploader().upload(
         clip_path,
         tag_ids or [],
         tag_names or [],
         album_ids or [],
         new_album_name or "",
+        metadata.get("clip_title") or metadata.get("display_heading") or "",
+        metadata if apply_auto_tags else None,
     )

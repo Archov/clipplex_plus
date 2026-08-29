@@ -116,6 +116,7 @@ class ClipJobManager:
                 "gif_export": "Starting GIF export.",
                 "clip_trim": "Starting clip trim.",
                 "extension_preview": "Preparing original-source preview.",
+                "immich_bulk_upload": "Starting Immich uploads.",
             }.get(job["job_type"], "Starting clip creation.")
             job["overall_progress"] = 1.0
             job["stage_progress"] = 0.0
@@ -150,9 +151,10 @@ class ClipJobManager:
                 job["status"] = "succeeded"
                 job["stage"] = "complete"
                 job["message"] = {
-                    "gif_export": "GIF ready.",
-                    "clip_trim": "Trimmed clip ready.",
-                    "extension_preview": "Original-source preview ready.",
+                "gif_export": "GIF ready.",
+                "clip_trim": "Trimmed clip ready.",
+                "extension_preview": "Original-source preview ready.",
+                "immich_bulk_upload": "Immich uploads complete.",
                 }.get(job["job_type"], "Clip created.")
                 job["overall_progress"] = 100.0
                 job["stage_progress"] = 100.0

@@ -19,6 +19,24 @@
     <button id="save_settings" class="btn btn-primary" type="submit"><i class="fas fa-save me-2" aria-hidden="true"></i>Save settings</button>
   </div>
 </form>
+
+<div class="modal fade" id="immich_permissions_modal" tabindex="-1" aria-labelledby="immich_permissions_title" aria-hidden="true">
+  <div class="modal-dialog modal-lg modal-dialog-scrollable">
+    <div class="modal-content">
+      <div class="modal-header">
+        <div>
+          <p class="eyebrow mb-1">Saved connection</p>
+          <h2 class="modal-title h5" id="immich_permissions_title">Immich API key permissions</h2>
+        </div>
+        <button type="button" class="btn-close btn-close-white" data-bs-dismiss="modal" aria-label="Close"></button>
+      </div>
+      <div id="immich_permissions_body" class="modal-body"></div>
+      <div class="modal-footer">
+        <button type="button" class="btn btn-secondary" data-bs-dismiss="modal">Close</button>
+      </div>
+    </div>
+  </div>
+</div>
 {% endblock %}
 
 {% block scripts %}

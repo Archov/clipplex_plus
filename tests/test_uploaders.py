@@ -123,6 +123,37 @@ class ImmichUploaderTests(unittest.TestCase):
         self.assertEqual([album["name"] for album in options["albums"]], ["Clips", "Trips"])
         self.assertEqual(options["default_tag"], "#plex-clip")
 
+    def test_asset_url_only_requires_the_configured_immich_url(self):
+        with patch("app.uploaders._setting", side_effect=lambda key: "http://immich:2283/api/" if key == "immich_url" else ""):
+            self.assertEqual(uploaders.immich_asset_url("asset-1"), "http://immich:2283/photos/asset-1")
+
+    def test_api_key_introspection_uses_current_key_endpoint_and_redacts_response(self):
+        with self.environment(), patch("app.uploaders.requests.request") as request:
+            request.return_value = ResponseStub({
+                "id": "key-id",
+                "name": "Clipplex",
+                "permissions": ["tag.read", "asset.read", "tag.read"],
+            })
+            result = uploaders.ImmichUploader().get_api_key()
+
+        self.assertEqual(result, {
+            "name": "Clipplex",
+            "permissions": ["asset.read", "tag.read"],
+        })
+        self.assertNotIn("id", result)
+        self.assertEqual(
+            request.call_args.args[:2],
+            ("GET", "http://immich:2283/api/api-keys/me"),
+        )
+        self.assertEqual(request.call_args.kwargs["headers"]["x-api-key"], "secret")
+
+    def test_api_key_introspection_rejects_malformed_response(self):
+        with self.environment(), patch.object(
+            uploaders.ImmichUploader, "_request", return_value={"name": "Clipplex"}
+        ):
+            with self.assertRaises(uploaders.UploadError):
+                uploaders.ImmichUploader().get_api_key()
+
     def test_upload_asset_sends_required_dates_filename_and_api_key(self):
         clip = uploaders.CLIP_DIRECTORY / "_uploader_test.mp4"
         try:
@@ -183,6 +214,137 @@ class ImmichUploaderTests(unittest.TestCase):
         self.assertEqual(result["upload_status"], "duplicate")
         self.assertEqual(len(result["failures"]), 2)
         create_album.assert_called_once_with("asset-1", "New Clips")
+
+    def test_hierarchical_automatic_tags_and_description_are_applied(self):
+        setting_values = {
+            "immich_url": "http://immich:2283",
+            "immich_api_key": "secret",
+            "immich_auto_tag_library": "true",
+            "immich_auto_tag_title": "true",
+            "immich_auto_tag_episode": "true",
+        }
+        with self.environment(), patch("app.uploaders._setting", side_effect=lambda key: setting_values.get(key, "")), \
+             patch.object(uploaders.ImmichUploader, "_upload_asset", return_value={"id": "asset-1"}), \
+             patch.object(uploaders.ImmichUploader, "_update_description") as description, \
+             patch.object(uploaders.ImmichUploader, "_hierarchy_tag_ids", return_value=["episode-tag-id"]) as hierarchy, \
+             patch.object(uploaders.ImmichUploader, "_assign_tags") as tags:
+            uploaders.ImmichUploader().upload(
+                Path("clip.mp4"), [], [], [], "", "My Clip", {
+                    "media_library": "Anime", "media_type": "episode", "show": "My Love Story",
+                    "season_number": "1", "episode_number": "6",
+                },
+            )
+
+        description.assert_called_once_with("asset-1", "My Clip")
+        hierarchy.assert_called_once()
+        tags.assert_called_once_with("asset-1", ["episode-tag-id"], [])
+
+    def test_description_update_uses_single_asset_upsert_and_verifies_value(self):
+        with self.environment(), patch.object(uploaders.ImmichUploader, "_request") as request:
+            request.side_effect = [
+                {"id": "asset-1"},
+                {"id": "asset-1", "exifInfo": {"description": "My Clip"}},
+            ]
+            uploaders.ImmichUploader()._update_description("asset-1", "My Clip")
+
+        self.assertEqual(request.call_args_list, [
+            call("PUT", "/assets/asset-1", json={"description": "My Clip"}),
+            call("GET", "/assets/asset-1"),
+        ])
+
+    def test_description_update_fails_when_immich_does_not_retain_value(self):
+        with self.environment(), patch.object(uploaders.ImmichUploader, "_request") as request:
+            request.side_effect = [
+                {"id": "asset-1"},
+                {"id": "asset-1", "exifInfo": {"description": ""}},
+            ]
+            with self.assertRaises(uploaders.UploadError) as raised:
+                uploaders.ImmichUploader()._update_description("asset-1", "My Clip")
+
+        self.assertIn("did not retain", raised.exception.message)
+
+    def test_asset_exists_distinguishes_missing_assets_from_connection_failures(self):
+        with self.environment(), patch("app.uploaders.requests.request") as request:
+            request.return_value = ResponseStub({"message": "Asset not found"}, 400)
+            self.assertFalse(uploaders.ImmichUploader().asset_exists("asset-1"))
+
+            request.return_value = ResponseStub({"message": "Permission denied"}, 403)
+            with self.assertRaises(uploaders.UploadError):
+                uploaders.ImmichUploader().asset_exists("asset-1")
+
+    def test_ambiguous_missing_asset_is_confirmed_with_current_key_permissions(self):
+        with self.environment(), patch("app.uploaders.requests.request") as request:
+            request.side_effect = [
+                ResponseStub({"message": "Not found or no asset.read access"}, 400),
+                ResponseStub({
+                    "id": "key-id",
+                    "name": "Clipplex",
+                    "permissions": ["asset.read", "asset.upload"],
+                }),
+            ]
+
+            self.assertFalse(uploaders.ImmichUploader().asset_exists("asset-1"))
+
+        self.assertEqual(
+            [item.args[:2] for item in request.call_args_list],
+            [
+                ("GET", "http://immich:2283/api/assets/asset-1"),
+                ("GET", "http://immich:2283/api/api-keys/me"),
+            ],
+        )
+
+    def test_ambiguous_missing_asset_is_not_assumed_deleted_without_read_permission(self):
+        with self.environment(), patch("app.uploaders.requests.request") as request:
+            request.side_effect = [
+                ResponseStub({"message": "Not found or no asset.read access"}, 400),
+                ResponseStub({
+                    "id": "key-id",
+                    "name": "Clipplex",
+                    "permissions": ["asset.upload"],
+                }),
+            ]
+
+            with self.assertRaises(uploaders.UploadError) as raised:
+                uploaders.ImmichUploader().asset_exists("asset-1")
+
+        self.assertIn("Not found or no asset.read access", raised.exception.message)
+
+    def test_hierarchy_reuses_existing_parent_and_assigns_only_the_leaf(self):
+        setting_values = {
+            "immich_url": "http://immich:2283", "immich_api_key": "secret",
+            "immich_auto_tag_library": "true", "immich_auto_tag_title": "true",
+            "immich_auto_tag_episode": "true",
+        }
+        with patch("app.uploaders._setting", side_effect=lambda key: setting_values.get(key, "")), \
+             patch.object(uploaders.ImmichUploader, "get_tags", return_value=[
+                 {"id": "library-id", "name": "Anime", "parent_id": None},
+             ]), patch.object(uploaders.ImmichUploader, "_request") as request:
+            request.side_effect = [
+                {"id": "show-id", "value": "Anime/My Love Story"},
+                {"id": "episode-id", "value": "Anime/My Love Story/S01E06"},
+            ]
+            leaf_ids = uploaders.ImmichUploader()._hierarchy_tag_ids({
+                "media_library": "Anime", "media_type": "episode", "show": "My Love Story",
+                "season_number": "1", "episode_number": "6",
+            })
+
+        self.assertEqual(leaf_ids, ["episode-id"])
+        self.assertEqual(request.call_args_list, [
+            call("POST", "/tags", json={"name": "My Love Story", "parentId": "library-id"}),
+            call("POST", "/tags", json={"name": "S01E06", "parentId": "show-id"}),
+        ])
+
+    def test_description_failure_retains_asset_id_as_partial_success(self):
+        with self.environment(), patch.object(uploaders.ImmichUploader, "_upload_asset", return_value={"id": "asset-1"}), \
+             patch.object(uploaders.ImmichUploader, "_update_description", side_effect=uploaders.UploadError("Update denied")), \
+             patch.object(uploaders.ImmichUploader, "_assign_tags"):
+            result, status = uploaders.ImmichUploader().upload(
+                Path("clip.mp4"), [], [], [], "", "My Clip",
+            )
+
+        self.assertEqual(status, 207)
+        self.assertEqual(result["asset_id"], "asset-1")
+        self.assertEqual(result["failures"], [{"step": "description", "message": "Update denied"}])
 
     def test_immich_http_error_does_not_expose_api_key(self):
         with self.environment(), patch("app.uploaders.requests.request", return_value=ResponseStub(
